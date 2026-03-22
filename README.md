@@ -1,4 +1,4 @@
-# Civicomfy v2.1
+# Civicomfy v4.0
 
 **Civitai Model Downloader & Library Manager for ComfyUI**
 
