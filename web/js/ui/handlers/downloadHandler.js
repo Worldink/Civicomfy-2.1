@@ -61,11 +61,20 @@ export async function handleDownloadSubmit(ui) {
   // Quick in-memory check: already installed?
   const checkMid = ui._previewModelId;
   const checkVid = vid || ui._previewVersionId;
-  if (checkMid && checkVid && ui.isVersionInstalled(checkMid, checkVid)) {
-    ui.showToast("This version is already installed.", "info", 4000);
-    ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn civitai-btn-installed';
-    ui.downloadSubmitButton.innerHTML = '<i class="fas fa-check"></i> Already Installed';
-    return;  // button stays disabled
+  if (checkMid && checkVid) {
+    if (ui.isVersionInstalled(checkMid, checkVid)) {
+      ui.showToast("This version is already installed.", "info", 4000);
+      ui.downloadSubmitButton.disabled = true;
+      ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn civitai-btn-installed';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+      return;
+    }
+    if (ui._downloadingVersions?.has(`${checkMid}:${checkVid}`)) {
+      ui.showToast("This version is already downloading.", "info", 4000);
+      ui.downloadSubmitButton.disabled = true;
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
+      return;
+    }
   }
 
   const params = {

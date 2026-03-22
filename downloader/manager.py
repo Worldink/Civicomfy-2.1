@@ -23,8 +23,6 @@ from ..config import (
 )
 
 HISTORY_FILE = os.path.join(PLUGIN_ROOT, "download_history.json")
-
-
 class DownloadManager:
     def __init__(self, max_concurrent: int = MAX_CONCURRENT_DOWNLOADS):
         self.queue: List[Dict[str, Any]] = []
@@ -118,6 +116,21 @@ class DownloadManager:
                 "active": [_c(i) for i in self.active.values()],
                 "history": [_c(i) for i in self.history[:DOWNLOAD_HISTORY_LIMIT]],
             }
+
+    def get_active_paths(self) -> set:
+        """Return set of output_path strings currently downloading or queued."""
+        with self._lock:
+            paths = set()
+            for item in self.queue:
+                p = item.get("output_path")
+                if p:
+                    paths.add(os.path.abspath(p))
+            for _, item in self.active.items():
+                if item.get("status") not in ("completed", "failed", "cancelled"):
+                    p = item.get("output_path")
+                    if p:
+                        paths.add(os.path.abspath(p))
+            return paths
 
     # ------------------------------------------------------------------
     # History
@@ -365,11 +378,11 @@ class DownloadManager:
         preview_path = base + PREVIEW_SUFFIX + ext
         resp = None
         try:
-            from .chunk_downloader import _session
-            headers = {}
+            import requests
+            headers = {"User-Agent": "Civicomfy/4.0 (ComfyUI)"}
             if info.get('api_key'):
                 headers["Authorization"] = f"Bearer {info['api_key']}"
-            resp = _session.get(thumb_url, stream=True, headers=headers,
+            resp = requests.get(thumb_url, stream=True, headers=headers,
                                 timeout=METADATA_DOWNLOAD_TIMEOUT, allow_redirects=True)
             resp.raise_for_status()
             ct = resp.headers.get('Content-Type', '').lower()
@@ -434,19 +447,11 @@ class DownloadManager:
                 print(f"[Civicomfy] Could not remove partial file {p}: {e}")
 
         print("[Civicomfy] Download manager stopped.")
-
-
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-
 # --- Global instance ---
 manager = DownloadManager(max_concurrent=MAX_CONCURRENT_DOWNLOADS)
-
-
 def _shutdown():
     if manager:
         manager.shutdown()
-
-
 atexit.register(_shutdown)

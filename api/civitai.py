@@ -5,20 +5,12 @@ Uses shared requests.Session for connection pooling.
 import requests
 import json
 from typing import List, Optional, Dict, Any, Union
-from requests.adapters import HTTPAdapter
-
 # Public Meilisearch bearer (same for all users)
 _MEILI_BEARER = "8c46eb2508e21db1e9828a97968d91ab1ca1caa5f70a00e88a2ba1e286603b61"
 _MEILI_URL = "https://search.civitai.com/multi-search"
 _MEILI_INDEX = "models_v9"
 
 # Shared session for all API calls (connection reuse = faster)
-_session = requests.Session()
-_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=1)
-_session.mount("https://", _adapter)
-_session.mount("http://", _adapter)
-
-
 class CivitaiAPI:
     """Wrapper for Civitai REST API v1 and Meilisearch."""
 
@@ -26,7 +18,7 @@ class CivitaiAPI:
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key
-        self._headers: Dict[str, str] = {}
+        self._headers: Dict[str, str] = {"User-Agent": "Civicomfy/4.0 (ComfyUI)"}
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
 
@@ -44,7 +36,7 @@ class CivitaiAPI:
             headers["Content-Type"] = "application/json"
 
         try:
-            resp = _session.request(
+            resp = requests.request(
                 method, url, headers=headers, params=params,
                 json=json_data, stream=stream, allow_redirects=True, timeout=timeout,
             )
@@ -153,7 +145,7 @@ class CivitaiAPI:
         }
 
         try:
-            resp = _session.post(_MEILI_URL, headers=headers, json=payload, timeout=25)
+            resp = requests.post(_MEILI_URL, headers=headers, json=payload, timeout=25)
             resp.raise_for_status()
             data = resp.json()
             results_list = data.get("results", [])

@@ -28,6 +28,8 @@ export function renderDownloadPreview(ui, data) {
   const eaDeadline = data.early_access_deadline;
   // Check installed from in-memory library scan (instant, no backend call)
   const alreadyDl = ui.isVersionInstalled(mid, vid) || data.already_downloaded === true;
+  // Check if currently downloading/queued
+  const isDownloading = ui._downloadingVersions?.has(`${mid}:${vid}`) || false;
 
   // Store current preview IDs for status poll to detect completed downloads
   ui._previewModelId = mid;
@@ -176,6 +178,10 @@ export function renderDownloadPreview(ui, data) {
       ui.downloadSubmitButton.disabled = true;
       ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn civitai-btn-installed';
       ui.downloadSubmitButton.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+    } else if (isDownloading) {
+      ui.downloadSubmitButton.disabled = true;
+      ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
     } else {
       ui.downloadSubmitButton.disabled = false;
       ui.downloadSubmitButton.className = 'civitai-button primary civitai-download-btn';

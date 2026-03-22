@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Optional, Dict, TYPE_CHECKING
 
 import requests
-from requests.adapters import HTTPAdapter
-
 if TYPE_CHECKING:
     from .manager import DownloadManager
 
@@ -23,16 +21,10 @@ from ..config import DEFAULT_CHUNK_SIZE, HEAD_REQUEST_TIMEOUT
 _CONNECT_TIMEOUT = 30
 _READ_TIMEOUT = 300
 _WRITE_BUFFER = 16 * 1024 * 1024
-_MAX_RETRIES = 3       # retry on mid-stream drops
-_RETRY_DELAY = 3       # seconds between retries
+_MAX_RETRIES = 5       # retry on mid-stream drops
+_RETRY_DELAY = 3       # seconds between retries (grows: 3, 6, 9, 12, 15)
 
 # Shared session
-_session = requests.Session()
-_adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8, max_retries=2)
-_session.mount("https://", _adapter)
-_session.mount("http://", _adapter)
-
-
 class ChunkDownloader:
     STATUS_INTERVAL = 0.5
 
@@ -71,7 +63,7 @@ class ChunkDownloader:
         return f"{url}{sep}token={api_key}"
 
     def _headers(self, for_download: bool = False, resume_from: int = 0) -> Dict[str, str]:
-        h: Dict[str, str] = {}
+        h: Dict[str, str] = {"User-Agent": "Civicomfy/4.0 (ComfyUI)"}
         if self.api_key and "token=" not in self.url:
             h["Authorization"] = f"Bearer {self.api_key}"
         if for_download:
@@ -110,7 +102,7 @@ class ChunkDownloader:
     def _head_check(self):
         """Best-effort: get file size and resolve redirects."""
         try:
-            r = _session.head(self.url, allow_redirects=True,
+            r = requests.head(self.url, allow_redirects=True,
                               timeout=HEAD_REQUEST_TIMEOUT, headers=self._headers())
             r.raise_for_status()
             if r.url != self.url:
@@ -150,7 +142,7 @@ class ChunkDownloader:
 
             try:
                 hdrs = self._headers(for_download=True, resume_from=resume_from)
-                resp = _session.get(
+                resp = requests.get(
                     self.url, stream=True, allow_redirects=True,
                     timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), headers=hdrs)
 
@@ -245,14 +237,43 @@ class ChunkDownloader:
                     return False
 
             except requests.exceptions.HTTPError as e:
-                # Non-recoverable HTTP errors
                 code = e.response.status_code if e.response else None
-                msgs = {401: "Unauthorized — API key may be needed",
-                        403: "Forbidden — check API key or access",
-                        404: "Not found — model may have been removed",
-                        503: "Civitai maintenance — try later"}
-                self.error = msgs.get(code, f"HTTP {code}" if code else "No server response")
-                return False
+
+                # Permanent errors — don't retry
+                if code == 401:
+                    self.error = "Unauthorized — API key may be needed"
+                    return False
+                if code == 403:
+                    self.error = "Forbidden — check API key or access"
+                    return False
+                if code == 404:
+                    self.error = "Not found — model may have been removed"
+                    return False
+
+                # Retryable: 5xx, 429, or no response at all
+                if resp:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+
+                if self.is_cancelled:
+                    return False
+
+                err_desc = f"HTTP {code}" if code else "No response"
+                if attempt < _MAX_RETRIES:
+                    wait = _RETRY_DELAY * (attempt + 1)
+                    print(f"[Civicomfy DL {self.download_id}] Server error ({err_desc}) at {self.downloaded} bytes. "
+                          f"Retry {attempt + 1}/{_MAX_RETRIES} in {wait}s...")
+                    if self.manager and self.download_id:
+                        self.manager._update_download_status(
+                            self.download_id, speed=0,
+                            error=f"Server error ({err_desc}), retrying... ({attempt + 1}/{_MAX_RETRIES})")
+                    time.sleep(wait)
+                    continue
+                else:
+                    self.error = f"Server error ({err_desc}) after {_MAX_RETRIES} retries"
+                    return False
 
             except OSError as e:
                 self.error = f"Disk error: {e}"

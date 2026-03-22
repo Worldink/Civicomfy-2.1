@@ -29,12 +29,15 @@ export function renderLibrary(ui, models, container, filter = '') {
       ? '<span class="civitai-meta-badge" title="Civitai metadata"><i class="fas fa-check-circle" style="color:#4caf50;"></i></span>'
       : '<span class="civitai-meta-badge" title="No metadata"><i class="fas fa-question-circle" style="color:#666;"></i></span>';
 
+    const isDl = m.is_downloading === true;
+    const dlBadge = isDl ? ' <span style="color:#5c8aff;font-size:.8em;"><i class="fas fa-spinner fa-spin"></i> Downloading</span>' : '';
+
     el.innerHTML = `
       <div class="civitai-thumbnail-container" style="width:65px;height:65px;">
         ${thumb}
       </div>
       <div class="civitai-download-info">
-        <strong>${name} ${metaIcon}</strong>
+        <strong>${name} ${metaIcon}${dlBadge}</strong>
         ${m.version_name ? `<p>${m.version_name}</p>` : ''}
         ${m.base_model ? `<p><span class="base-model-badge">${m.base_model}</span></p>` : ''}
         ${m.creator ? `<p style="color:#aaa;"><i class="fas fa-user"></i> ${m.creator}</p>` : ''}
@@ -42,7 +45,7 @@ export function renderLibrary(ui, models, container, filter = '') {
       </div>
       <div class="civitai-download-actions" style="flex-direction:column;gap:5px;">
         ${m.civitai_url ? `<a href="${m.civitai_url}" target="_blank" rel="noopener" class="civitai-button small" title="View on Civitai"><i class="fas fa-external-link-alt"></i></a>` : ''}
-        <button class="civitai-button danger small civitai-delete-model-button" data-abs-path="${m.abs_path}" data-name="${name}" title="Delete from disk"><i class="fas fa-trash-alt"></i></button>
+        <button class="civitai-button danger small civitai-delete-model-button" data-abs-path="${m.abs_path}" data-name="${name}" ${isDl ? 'disabled title="Cannot delete while downloading"' : 'title="Delete from disk"'}><i class="fas fa-trash-alt"></i></button>
       </div>`;
 
     frag.appendChild(el);

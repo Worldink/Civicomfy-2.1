@@ -116,7 +116,7 @@ export function setupEventListeners(ui) {
   });
   ui.libraryListContainer?.addEventListener('click', e => {
     const del = e.target.closest('.civitai-delete-model-button');
-    if (del) ui.handleDeleteModel(del.dataset.absPath, del.dataset.name || 'this model');
+    if (del && !del.disabled) ui.handleDeleteModel(del.dataset.absPath, del.dataset.name || 'this model');
   });
 
   // --- Confirm modal ---

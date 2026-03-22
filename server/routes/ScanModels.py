@@ -147,8 +147,20 @@ async def route_scan_models(request):
             models_dir = os.path.join(
                 getattr(folder_paths, 'base_path', os.getcwd()), 'models')
 
+        # Get active download paths to mark them
+        active_paths = set()
+        try:
+            from ...downloader.manager import manager as _dm
+            active_paths = _dm.get_active_paths()
+        except Exception:
+            pass
+
         # Run scan in thread to avoid blocking
         results = await asyncio.to_thread(_scan_directory, models_dir)
+
+        # Mark entries that are currently being downloaded
+        for entry in results:
+            entry["is_downloading"] = os.path.abspath(entry["abs_path"]) in active_paths
 
         return web.json_response({
             "success": True,

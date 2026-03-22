@@ -7,22 +7,22 @@ export class CivitaiDownloaderAPI {
       const r = await api.fetchApi(url, opts);
 
       if (!r.ok) {
-        // Try multiple ways to extract error info
         let errorMsg = `HTTP ${r.status}`;
         let details = "";
         try {
-          const d = await r.json();
-          errorMsg = d.error || d.reason || d.message || errorMsg;
-          details = d.details || d.detail || d.error || "";
-        } catch (_) {
+          // Read body ONCE as text, then try JSON parse
+          const txt = await r.text();
           try {
-            const txt = await r.text();
-            // aiohttp HTTPError returns HTML with reason in title/body
-            const reasonMatch = txt.match(/(?:<title>|<h1>)\d+:\s*(.+?)(?:<\/title>|<\/h1>)/i);
-            if (reasonMatch) errorMsg = reasonMatch[1];
-            else if (txt.length < 200) details = txt;
-          } catch (_2) {}
-        }
+            const d = JSON.parse(txt);
+            errorMsg = d.error || d.reason || d.message || errorMsg;
+            details = d.details || d.detail || d.error || "";
+          } catch (_) {
+            // Not JSON — try extract reason from HTML
+            const m = txt.match(/(?:<title>|<h1>)\d+:\s*(.+?)(?:<\/title>|<\/h1>)/i);
+            if (m) errorMsg = m[1];
+            else if (txt.length > 0 && txt.length < 300) details = txt;
+          }
+        } catch (_) {}
         const e = new Error(errorMsg);
         e.details = details || errorMsg;
         e.status = r.status;
@@ -32,7 +32,7 @@ export class CivitaiDownloaderAPI {
       if (r.status === 204 || r.headers.get("Content-Length") === "0") return null;
       return await r.json();
     } catch (e) {
-      if (!e.details) e.details = e.message;
+      if (!e.details) e.details = e.message || "Request failed";
       throw e;
     }
   }

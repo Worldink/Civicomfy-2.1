@@ -20,7 +20,17 @@ export async function updateStatus(ui) {
     const d = await CivitaiDownloaderAPI.getStatus();
     if (!d?.active || !d?.queue || !d?.history) return;
 
-    // Detect newly completed downloads → update installed set + refresh preview
+    // Build set of currently downloading/queued versions
+    const dlSet = new Set();
+    for (const item of [...d.active, ...d.queue]) {
+      if (item.civitai_model_id && item.civitai_version_id &&
+          !['completed', 'failed', 'cancelled'].includes(item.status)) {
+        dlSet.add(`${item.civitai_model_id}:${item.civitai_version_id}`);
+      }
+    }
+    ui._downloadingVersions = dlSet;
+
+    // Detect newly completed downloads → update installed set
     const prevCompleted = ui._completedIds || new Set();
     const newCompleted = new Set();
     for (const item of d.history) {
@@ -28,12 +38,10 @@ export async function updateStatus(ui) {
         const key = `${item.civitai_model_id}:${item.civitai_version_id}`;
         newCompleted.add(item.id);
         if (!prevCompleted.has(item.id)) {
-          // Newly completed — add to installed set
           ui._installedVersions.add(key);
         }
       }
     }
-    // Also check active (just finished but not yet in history)
     for (const item of d.active) {
       if (item.status === 'completed' && item.civitai_model_id && item.civitai_version_id) {
         ui._installedVersions.add(`${item.civitai_model_id}:${item.civitai_version_id}`);
@@ -41,15 +49,23 @@ export async function updateStatus(ui) {
     }
     ui._completedIds = newCompleted;
 
-    // If Download tab is open and showing a model that just got installed → update button
+    // If Download tab open → update button to match current state
     if (ui.activeTab === 'download' && ui._previewModelId && ui._previewVersionId) {
       const key = `${ui._previewModelId}:${ui._previewVersionId}`;
-      if (ui._installedVersions.has(key)) {
-        const btn = ui.downloadSubmitButton;
-        if (btn && !btn.classList.contains('civitai-btn-installed')) {
-          btn.disabled = true;
-          btn.className = 'civitai-button civitai-download-btn civitai-btn-installed';
-          btn.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+      const btn = ui.downloadSubmitButton;
+      if (btn) {
+        if (ui._installedVersions.has(key)) {
+          if (!btn.classList.contains('civitai-btn-installed')) {
+            btn.disabled = true;
+            btn.className = 'civitai-button civitai-download-btn civitai-btn-installed';
+            btn.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+          }
+        } else if (dlSet.has(key)) {
+          if (!btn.innerHTML.includes('Downloading')) {
+            btn.disabled = true;
+            btn.className = 'civitai-button civitai-download-btn';
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
+          }
         }
       }
     }

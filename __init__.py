@@ -23,7 +23,7 @@ if _ok:
     WEB_DIRECTORY = "./web"
 
     print("-" * 40)
-    print("  Civicomfy v2.1 Loaded")
+    print("  Civicomfy v4.0 Loaded")
     print(f"  Web: {os.path.abspath(os.path.join(EXTENSION_ROOT, 'web'))}")
     print("-" * 40)
 else:

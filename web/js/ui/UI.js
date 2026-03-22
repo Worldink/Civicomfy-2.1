@@ -28,6 +28,7 @@ export class CivitaiDownloaderUI {
     this._lastPreviewReq = 0;
     this._libraryModels = null;
     this._installedVersions = new Set(); // "modelId:versionId" strings for instant lookup
+    this._downloadingVersions = new Set(); // "modelId:versionId" currently downloading/queued
     this._completedIds = new Set(); // track already-processed completed download IDs
     this._confirmAction = null;
     this._pendingDelete = null;
@@ -164,6 +165,10 @@ export class CivitaiDownloaderUI {
     this.tabContents[id].classList.add('active');
     this.tabContents[id].scrollTop = 0;
     this.activeTab = id;
+
+    // Close any open confirm dialog when switching tabs
+    if (this.confirmModal) this.confirmModal.style.display = 'none';
+
     if (id === 'status') this.updateStatus();
     else if (id === 'settings') { this.applySettings(); this.checkCivitaiStatus(); }
     else if (id === 'library' && this._libraryModels) {
@@ -185,6 +190,11 @@ export class CivitaiDownloaderUI {
     this.modal?.classList.remove('open');
     document.body.style.removeProperty('overflow');
     this.stopStatusUpdates();
+
+    // Close any open confirm dialog
+    if (this.confirmModal) this.confirmModal.style.display = 'none';
+    this._pendingDelete = null;
+    this._confirmAction = null;
 
     // Reset ONLY search + download (library and status persist)
     if (this.searchResultsContainer) this.searchResultsContainer.innerHTML = '';

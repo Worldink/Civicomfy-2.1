@@ -1,17 +1,19 @@
-"""Delete a model file and its associated metadata/preview from disk."""
+"""Delete a model file and its associated metadata/preview from disk.
+Blocks deletion if the file is currently being downloaded."""
 import os
 import asyncio
 from aiohttp import web
 import server as comfy_server
 import folder_paths
 from ...config import METADATA_SUFFIX, PREVIEW_SUFFIX
+from ...downloader.manager import manager as download_manager
 
 ps = comfy_server.PromptServer.instance
 
 _PREVIEW_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.gif']
 
 
-def _delete_model_files(abs_path: str, models_dir: str) -> dict:
+def _delete_model_files(abs_path: str, models_dir: str, active_paths: set) -> dict:
     """Delete a model file and all associated sidecar files."""
     abs_path = os.path.abspath(abs_path)
     models_dir_abs = os.path.abspath(models_dir)
@@ -23,11 +25,14 @@ def _delete_model_files(abs_path: str, models_dir: str) -> dict:
     if not os.path.isfile(abs_path):
         return {"success": False, "error": "File not found."}
 
+    # Block deletion if file is currently downloading
+    if abs_path in active_paths:
+        return {"success": False, "error": "Cannot delete — this file is currently downloading. Cancel the download first."}
+
     deleted = []
     errors = []
 
     base, _ = os.path.splitext(abs_path)
-    directory = os.path.dirname(abs_path)
 
     # Files to delete: model + metadata + preview
     targets = [abs_path]
@@ -51,6 +56,8 @@ def _delete_model_files(abs_path: str, models_dir: str) -> dict:
         try:
             os.remove(t)
             deleted.append(os.path.basename(t))
+        except PermissionError:
+            errors.append(f"{os.path.basename(t)}: file is in use (try closing any programs using it)")
         except Exception as e:
             errors.append(f"{os.path.basename(t)}: {e}")
 
@@ -77,7 +84,10 @@ async def route_delete_model(request):
             models_dir = os.path.join(
                 getattr(folder_paths, 'base_path', os.getcwd()), 'models')
 
-        result = await asyncio.to_thread(_delete_model_files, abs_path, models_dir)
+        # Get active download paths for safety check
+        active_paths = download_manager.get_active_paths()
+
+        result = await asyncio.to_thread(_delete_model_files, abs_path, models_dir, active_paths)
         status = 200 if result["success"] else 400
         return web.json_response(result, status=status)
 
