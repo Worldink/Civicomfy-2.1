@@ -1,248 +1,129 @@
 import { CivitaiDownloaderAPI } from "../../api/civitai.js";
+
 export function setupEventListeners(ui) {
-    // Modal close
-    ui.closeButton.addEventListener('click', () => ui.closeModal());
-    ui.modal.addEventListener('click', (event) => {
-        if (event.target === ui.modal) ui.closeModal();
-    });
+  ui.closeButton.addEventListener('click', () => ui.closeModal());
+  // Modal closes only via X button (no click-outside dismiss)
 
-    // Tab switching
-    ui.tabContainer.addEventListener('click', (event) => {
-        if (event.target.matches('.civitai-downloader-tab')) {
-            ui.switchTab(event.target.dataset.tab);
-        }
-    });
+  // Tabs
+  ui.tabContainer.addEventListener('click', e => {
+    if (e.target.matches('.civitai-downloader-tab')) ui.switchTab(e.target.dataset.tab);
+  });
 
-    // --- FORMS ---
-    ui.downloadForm.addEventListener('submit', (event) => {
-        event.preventDefault();
-        ui.handleDownloadSubmit();
-    });
+  // Forms
+  ui.downloadForm.addEventListener('submit', e => { e.preventDefault(); ui.handleDownloadSubmit(); });
+  ui.searchForm.addEventListener('submit', e => {
+    e.preventDefault();
+    if (!ui.searchQueryInput.value.trim() && ui.searchTypeSelect.value === 'any' && ui.searchBaseModelSelect.value === 'any') {
+      ui.showToast("Enter query or filter.", "error"); return;
+    }
+    ui.searchPagination.currentPage = 1;
+    ui.handleSearchSubmit();
+  });
+  ui.settingsForm.addEventListener('submit', e => { e.preventDefault(); ui.handleSettingsSave(); });
 
-    // Change of model type should refresh subdir list
-    ui.downloadModelTypeSelect.addEventListener('change', async () => {
-        await ui.loadAndPopulateSubdirs(ui.downloadModelTypeSelect.value);
-    });
+  // Create model type folder
+  ui.createModelTypeButton.addEventListener('click', async () => {
+    const name = prompt('New model type folder name:');
+    if (!name) return;
+    try {
+      const r = await CivitaiDownloaderAPI.createModelType(name);
+      if (r?.success) { await ui.populateModelTypes(); ui.downloadModelTypeSelect.value = r.name; ui.showToast(`Created: ${r.name}`, 'success'); }
+      else ui.showToast(r?.error || 'Failed', 'error');
+    } catch (e) { ui.showToast(e.message, 'error'); }
+  });
 
-    // Create new model type folder (first-level under models/)
-    ui.createModelTypeButton.addEventListener('click', async () => {
-        const name = prompt('Enter new model type folder name (will be created under models/)');
-        if (!name) return;
-        try {
-            const res = await CivitaiDownloaderAPI.createModelType(name);
-            if (res && res.success) {
-                await ui.populateModelTypes();
-                ui.downloadModelTypeSelect.value = res.name;
-                await ui.loadAndPopulateSubdirs(res.name);
-                ui.showToast(`Created model type folder: ${res.name}`, 'success');
-            } else {
-                ui.showToast(res?.error || 'Failed to create model type folder', 'error');
-            }
-        } catch (e) {
-            ui.showToast(e.details || e.message || 'Error creating model type folder', 'error');
-        }
-    });
+  // Download preview
+  ui.modelUrlInput.addEventListener('input', () => ui.debounceFetchDownloadPreview());
+  ui.modelUrlInput.addEventListener('paste', () => ui.debounceFetchDownloadPreview(100));
 
-    // Create new subfolder under current model type
-    ui.createSubdirButton.addEventListener('click', async () => {
-        const type = ui.downloadModelTypeSelect.value;
-        const name = prompt('Enter new subfolder name (you can include nested paths like A/B):');
-        if (!name) return;
-        try {
-            const res = await CivitaiDownloaderAPI.createModelDir(type, name);
-            if (res && res.success) {
-                await ui.loadAndPopulateSubdirs(type);
-                if (ui.subdirSelect) ui.subdirSelect.value = res.created || '';
-                ui.showToast(`Created folder: ${res.created}`, 'success');
-            } else {
-                ui.showToast(res?.error || 'Failed to create folder', 'error');
-            }
-        } catch (e) {
-            ui.showToast(e.details || e.message || 'Error creating folder', 'error');
-        }
-    });
+  // Settings buttons
+  ui.settingsSetGlobalRootButton?.addEventListener('click', () => ui.handleSetGlobalRoot());
+  ui.settingsClearGlobalRootButton?.addEventListener('click', () => ui.handleClearGlobalRoot());
+  ui.modal.querySelector('#civitai-refresh-status')?.addEventListener('click', () => ui.checkCivitaiStatus());
 
-    ui.searchForm.addEventListener('submit', (event) => {
-        event.preventDefault();
-        if (!ui.searchQueryInput.value.trim() && ui.searchTypeSelect.value === 'any' && ui.searchBaseModelSelect.value === 'any') {
-            ui.showToast("Please enter a search query or select a filter.", "error");
-            if (ui.searchResultsContainer) ui.searchResultsContainer.innerHTML = '<p>Please enter a search query or select a filter.</p>';
-            if (ui.searchPaginationContainer) ui.searchPaginationContainer.innerHTML = '';
-            return;
-        }
-        ui.searchPagination.currentPage = 1;
+  // --- Blur toggle helper ---
+  function toggleBlur(e) {
+    const tc = e.target.closest('.civitai-thumbnail-container, .civitai-gallery-item');
+    if (!tc) return false;
+    const lvl = Number(tc.dataset.nsfwLevel ?? 0);
+    if (!(ui.settings?.hideMatureInSearch && lvl >= (ui.settings?.nsfwBlurMinLevel ?? 4))) return false;
+    tc.classList.toggle('blurred');
+    const ov = tc.querySelector('.civitai-nsfw-overlay');
+    if (ov) ov.style.display = tc.classList.contains('blurred') ? '' : 'none';
+    return true;
+  }
+
+  // --- Status tab ---
+  ui.statusContent.addEventListener('click', e => {
+    if (toggleBlur(e)) return;
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    if (id) {
+      if (btn.classList.contains('civitai-cancel-button')) ui.handleCancelDownload(id);
+      else if (btn.classList.contains('civitai-retry-button')) ui.handleRetryDownload(id, btn);
+      else if (btn.classList.contains('civitai-openpath-button')) ui.handleOpenPath(id, btn);
+    } else if (btn.id === 'civitai-clear-history-button') {
+      ui._confirmAction = 'clear_history';
+      if (ui.confirmText) ui.confirmText.textContent = 'Clear download history?';
+      ui.confirmModal.style.display = 'flex';
+    }
+  });
+
+  // --- Search results: single download button → sends to Download tab ---
+  ui.searchResultsContainer.addEventListener('click', e => {
+    if (toggleBlur(e)) return;
+    const dlBtn = e.target.closest('.civitai-search-download-button');
+    if (dlBtn) {
+      e.preventDefault();
+      const mid = dlBtn.dataset.modelId;
+      const mtype = dlBtn.dataset.modelType;
+      if (!mid) { ui.showToast("Missing data.", "error"); return; }
+
+      const typeKey = Object.keys(ui.modelTypes).find(
+        k => ui.modelTypes[k]?.toLowerCase() === mtype?.toLowerCase()
+      ) || ui.settings.defaultModelType;
+
+      ui.modelUrlInput.value = mid;
+      // Clear version - will auto-select latest
+      const hiddenVid = ui.modal.querySelector('#civitai-model-version-id');
+      if (hiddenVid) hiddenVid.value = '';
+      ui.customFilenameInput.value = '';
+      if (ui.subfolderInput) ui.subfolderInput.value = '';
+      ui.downloadModelTypeSelect.value = typeKey;
+      ui.switchTab('download');
+      ui.fetchAndDisplayDownloadPreview();
+      return;
+    }
+  });
+
+  // Pagination
+  ui.searchPaginationContainer.addEventListener('click', e => {
+    const btn = e.target.closest('.civitai-page-button');
+    if (btn && !btn.disabled) {
+      const pg = parseInt(btn.dataset.page, 10);
+      if (pg && pg !== ui.searchPagination.currentPage) {
+        ui.searchPagination.currentPage = pg;
         ui.handleSearchSubmit();
-    });
-
-    ui.settingsForm.addEventListener('submit', (event) => {
-        event.preventDefault();
-        ui.handleSettingsSave();
-    });
-    if (ui.settingsSetGlobalRootButton) {
-        ui.settingsSetGlobalRootButton.addEventListener('click', () => {
-            ui.handleSetGlobalRoot();
-        });
+      }
     }
-    if (ui.settingsClearGlobalRootButton) {
-        ui.settingsClearGlobalRootButton.addEventListener('click', () => {
-            ui.handleClearGlobalRoot();
-        });
-    }
+  });
 
-    // Download form inputs
-    ui.modelUrlInput.addEventListener('input', () => ui.debounceFetchDownloadPreview());
-    ui.modelUrlInput.addEventListener('paste', () => ui.debounceFetchDownloadPreview(0));
-    ui.modelVersionIdInput.addEventListener('blur', () => ui.fetchAndDisplayDownloadPreview());
+  // --- Library ---
+  ui.libraryScanButton?.addEventListener('click', () => ui.handleLibraryScan(false));
+  ui.librarySearchInput?.addEventListener('input', () => {
+    if (ui._libraryModels) ui.renderLibrary(ui._libraryModels, ui.libraryListContainer, ui.librarySearchInput.value);
+  });
+  ui.libraryListContainer?.addEventListener('click', e => {
+    const del = e.target.closest('.civitai-delete-model-button');
+    if (del) ui.handleDeleteModel(del.dataset.absPath, del.dataset.name || 'this model');
+  });
 
-    // --- DYNAMIC CONTENT LISTENERS (Event Delegation) ---
-
-    // Status tab actions (Cancel/Retry/Open/Clear) and click-to-toggle blur on thumbs
-    ui.statusContent.addEventListener('click', (event) => {
-        const thumbContainer = event.target.closest('.civitai-thumbnail-container');
-        if (thumbContainer) {
-            const nsfwLevel = Number(thumbContainer.dataset.nsfwLevel ?? thumbContainer.getAttribute('data-nsfw-level'));
-            const threshold = Number(ui.settings?.nsfwBlurMinLevel ?? 4);
-            const enabled = ui.settings?.hideMatureInSearch === true;
-            if (enabled && Number.isFinite(nsfwLevel) && nsfwLevel >= threshold) {
-                if (thumbContainer.classList.contains('blurred')) {
-                    thumbContainer.classList.remove('blurred');
-                    const overlay = thumbContainer.querySelector('.civitai-nsfw-overlay');
-                    if (overlay) overlay.remove();
-                } else {
-                    thumbContainer.classList.add('blurred');
-                    if (!thumbContainer.querySelector('.civitai-nsfw-overlay')) {
-                        const ov = document.createElement('div');
-                        ov.className = 'civitai-nsfw-overlay';
-                        ov.title = 'R-rated: click to reveal';
-                        ov.textContent = 'R';
-                        thumbContainer.appendChild(ov);
-                    }
-                }
-                return; // consume
-            }
-        }
-
-        const button = event.target.closest('button');
-        if (!button) return;
-
-        const downloadId = button.dataset.id;
-        if (downloadId) {
-            if (button.classList.contains('civitai-cancel-button')) ui.handleCancelDownload(downloadId);
-            else if (button.classList.contains('civitai-retry-button')) ui.handleRetryDownload(downloadId, button);
-            else if (button.classList.contains('civitai-openpath-button')) ui.handleOpenPath(downloadId, button);
-        } else if (button.id === 'civitai-clear-history-button') {
-            ui.confirmClearModal.style.display = 'flex';
-        }
-    });
-
-    // Download preview click-to-toggle blur
-    ui.downloadPreviewArea.addEventListener('click', (event) => {
-        const thumbContainer = event.target.closest('.civitai-thumbnail-container');
-        if (thumbContainer) {
-            const nsfwLevel = Number(thumbContainer.dataset.nsfwLevel ?? thumbContainer.getAttribute('data-nsfw-level'));
-            const threshold = Number(ui.settings?.nsfwBlurMinLevel ?? 4);
-            const enabled = ui.settings?.hideMatureInSearch === true;
-            if (enabled && Number.isFinite(nsfwLevel) && nsfwLevel >= threshold) {
-                if (thumbContainer.classList.contains('blurred')) {
-                    thumbContainer.classList.remove('blurred');
-                    const overlay = thumbContainer.querySelector('.civitai-nsfw-overlay');
-                    if (overlay) overlay.remove();
-                } else {
-                    thumbContainer.classList.add('blurred');
-                    if (!thumbContainer.querySelector('.civitai-nsfw-overlay')) {
-                        const ov = document.createElement('div');
-                        ov.className = 'civitai-nsfw-overlay';
-                        ov.title = 'R-rated: click to reveal';
-                        ov.textContent = 'R';
-                        thumbContainer.appendChild(ov);
-                    }
-                }
-            }
-        }
-    });
-
-    // Search results actions, including click-to-toggle blur
-    ui.searchResultsContainer.addEventListener('click', (event) => {
-        const thumbContainer = event.target.closest('.civitai-thumbnail-container');
-        if (thumbContainer) {
-            const nsfwLevel = Number(thumbContainer.dataset.nsfwLevel ?? thumbContainer.getAttribute('data-nsfw-level'));
-            const threshold = Number(ui.settings?.nsfwBlurMinLevel ?? 4);
-            const enabled = ui.settings?.hideMatureInSearch === true;
-            if (enabled && Number.isFinite(nsfwLevel) && nsfwLevel >= threshold) {
-                if (thumbContainer.classList.contains('blurred')) {
-                    thumbContainer.classList.remove('blurred');
-                    const overlay = thumbContainer.querySelector('.civitai-nsfw-overlay');
-                    if (overlay) overlay.remove();
-                } else {
-                    thumbContainer.classList.add('blurred');
-                    if (!thumbContainer.querySelector('.civitai-nsfw-overlay')) {
-                        const ov = document.createElement('div');
-                        ov.className = 'civitai-nsfw-overlay';
-                        ov.title = 'R-rated: click to reveal';
-                        ov.textContent = 'R';
-                        thumbContainer.appendChild(ov);
-                    }
-                }
-                return; // Don't trigger other actions on this click
-            }
-        }
-
-        const downloadButton = event.target.closest('.civitai-search-download-button');
-        if (downloadButton) {
-            event.preventDefault();
-            const { modelId, versionId, modelType } = downloadButton.dataset;
-            if (!modelId || !versionId) {
-                ui.showToast("Error: Missing data for download.", "error");
-                return;
-            }
-            const modelTypeInternalKey = Object.keys(ui.modelTypes).find(key => ui.modelTypes[key]?.toLowerCase() === modelType?.toLowerCase()) || ui.settings.defaultModelType;
-
-            ui.modelUrlInput.value = modelId;
-            ui.modelVersionIdInput.value = versionId;
-            ui.customFilenameInput.value = '';
-            ui.forceRedownloadCheckbox.checked = false;
-            ui.downloadModelTypeSelect.value = modelTypeInternalKey;
-
-            ui.switchTab('download');
-            ui.showToast(`Filled download form for Model ID ${modelId}.`, 'info', 4000);
-            ui.fetchAndDisplayDownloadPreview();
-            return;
-        }
-
-        const viewAllButton = event.target.closest('.show-all-versions-button');
-        if (viewAllButton) {
-            const modelId = viewAllButton.dataset.modelId;
-            const versionsContainer = ui.searchResultsContainer.querySelector(`#all-versions-${modelId}`);
-            if (versionsContainer) {
-                const currentlyVisible = versionsContainer.style.display !== 'none';
-                versionsContainer.style.display = currentlyVisible ? 'none' : 'flex';
-                viewAllButton.innerHTML = currentlyVisible
-                    ? `All versions (${viewAllButton.dataset.totalVersions}) <i class="fas fa-chevron-down"></i>`
-                    : `Show less <i class="fas fa-chevron-up"></i>`;
-            }
-        }
-    });
-
-    // Pagination
-    ui.searchPaginationContainer.addEventListener('click', (event) => {
-        const button = event.target.closest('.civitai-page-button');
-        if (button && !button.disabled) {
-            const page = parseInt(button.dataset.page, 10);
-            if (page && page !== ui.searchPagination.currentPage) {
-                ui.searchPagination.currentPage = page;
-                ui.handleSearchSubmit();
-            }
-        }
-    });
-
-    // Confirmation Modal
-    ui.confirmClearYesButton.addEventListener('click', () => ui.handleClearHistory());
-    ui.confirmClearNoButton.addEventListener('click', () => {
-        ui.confirmClearModal.style.display = 'none';
-    });
-    ui.confirmClearModal.addEventListener('click', (event) => {
-        if (event.target === ui.confirmClearModal) {
-            ui.confirmClearModal.style.display = 'none';
-        }
-    });
+  // --- Confirm modal ---
+  ui.confirmYesButton.addEventListener('click', () => {
+    if (ui._confirmAction === 'clear_history') ui.handleClearHistory();
+    else if (ui._confirmAction === 'delete_model') ui.executeDeleteModel();
+  });
+  ui.confirmNoButton.addEventListener('click', () => { ui.confirmModal.style.display = 'none'; });
+  ui.confirmModal.addEventListener('click', e => { if (e.target === ui.confirmModal) ui.confirmModal.style.display = 'none'; });
 }

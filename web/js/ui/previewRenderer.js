@@ -1,96 +1,181 @@
-// Renders the download preview panel
-
-const PLACEHOLDER_IMAGE_URL = `/extensions/Civicomfy/images/placeholder.jpeg`;
+/**
+ * Download tab preview: version selector, image gallery, description, file info.
+ * "View on Civitai" moved here. EA and already-installed checks shown inline.
+ */
+const PH = `/extensions/Civicomfy/images/placeholder.jpeg`;
+const _IMG_BASE = "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7QA";
 
 export function renderDownloadPreview(ui, data) {
   if (!ui.downloadPreviewArea) return;
   ui.ensureFontAwesome();
 
-  const modelId = data.model_id;
-  const modelName = data.model_name || 'Untitled Model';
-  const creator = data.creator_username || 'Unknown Creator';
-  const modelType = data.model_type || 'N/A';
-  const versionName = data.version_name || 'N/A';
-  const baseModel = data.base_model || 'N/A';
+  const mid = data.model_id;
+  const vid = data.version_id;
+  const name = data.model_name || 'Untitled';
+  const creator = data.creator_username || 'Unknown';
+  const mtype = data.model_type || 'N/A';
+  const vname = data.version_name || 'N/A';
+  const bm = data.base_model || 'N/A';
   const stats = data.stats || {};
-  const descriptionHtml = data.description_html || '<p><em>No description.</em></p>';
-  const version_description_html = data.version_description_html || '<p><em>No description.</em></p>';
-  const fileInfo = data.file_info || {};
-  const files = Array.isArray(data.files) ? data.files : [];
-  const thumbnail = data.thumbnail_url || PLACEHOLDER_IMAGE_URL;
-  const nsfwLevel = Number(data.nsfw_level ?? 0);
-  const blurMinLevel = Number(ui.settings?.nsfwBlurMinLevel ?? 4);
-  const shouldBlur = ui.settings?.hideMatureInSearch === true && nsfwLevel >= blurMinLevel;
-  const civitaiLink = `https://civitai.com/models/${modelId}${data.version_id ? '?modelVersionId=' + data.version_id : ''}`;
+  const desc = data.description_html || '';
+  const vdesc = data.version_description_html || '';
+  const fi = data.file_info || {};
+  const files = data.files || [];
+  const allVersions = data.all_versions || [];
+  const images = data.images || [];
+  const trainedWords = data.trained_words || [];
+  const isEA = data.is_early_access === true;
+  const eaDeadline = data.early_access_deadline;
+  // Check installed from in-memory library scan (instant, no backend call)
+  const alreadyDl = ui.isVersionInstalled(mid, vid) || data.already_downloaded === true;
 
-  const onErrorScript = `this.onerror=null; this.src='${PLACEHOLDER_IMAGE_URL}'; this.style.backgroundColor='#444';`;
+  const civLink = mid ? `https://civitai.com/models/${mid}${vid ? '?modelVersionId=' + vid : ''}` : '#';
 
-  const overlayHtml = shouldBlur ? `<div class="civitai-nsfw-overlay" title="R-rated: click to reveal">R</div>` : '';
-  const containerClasses = `civitai-thumbnail-container${shouldBlur ? ' blurred' : ''}`;
+  // --- Version selector ---
+  let versionOptions = allVersions.map(v => {
+    const sel = v.id == vid ? 'selected' : '';
+    const ea = v.is_early_access ? ' [EA]' : '';
+    return `<option value="${v.id}" ${sel}>${v.name}${v.baseModel ? ' — ' + v.baseModel : ''}${ea}</option>`;
+  }).join('');
 
-  const previewHtml = `
-    <div class="civitai-search-item" style="background-color: var(--comfy-input-bg);">
-      <div class="${containerClasses}" data-nsfw-level="${Number.isFinite(nsfwLevel) ? nsfwLevel : ''}">
-        <img src="${thumbnail}" alt="${modelName} thumbnail" class="civitai-search-thumbnail" loading="lazy" onerror="${onErrorScript}">
-        ${overlayHtml}
-        <div class="civitai-type-badge">${modelType}</div>
-      </div>
-      <div class="civitai-search-info">
-        <h4>${modelName} <span style="font-weight: normal; font-size: 0.9em;">by ${creator}</span></h4>
-        <p style="font-weight: bold;">Version: ${versionName} <span class="base-model-badge" style="margin-left: 5px;">${baseModel}</span></p>
-        <div class="civitai-search-stats" title="Stats: Downloads / Rating (Count) / Likes">
-          <span title="Downloads"><i class="fas fa-download"></i> ${stats.downloads?.toLocaleString() || 0}</span>
-          <span title="Likes"><i class="fas fa-thumbs-up"></i> ${stats.likes?.toLocaleString(0) || 0}</span>
-          <span title="Dislikes"><i class="fas fa-thumbs-down"></i> ${stats.dislikes?.toLocaleString() || 0}</span>
-          <span title="Buzz"><i class="fas fa-bolt"></i> ${stats.buzz?.toLocaleString() || 0}</span>
-        </div>
-        <p style="font-weight: bold; margin-top: 10px;">Primary File:</p>
-        <p style="font-size: 0.9em; color: #ccc;">
-          Name: ${fileInfo.name || 'N/A'}<br>
-          Size: ${ui.formatBytes(fileInfo.size_kb * 1024) || 'N/A'} <br>
-          Format: ${fileInfo.format || 'N/A'}<br>
-          Precision: ${fileInfo.precision || 'N/A'}<br>
-          Model Size: ${fileInfo.model_size || 'N/A'}
-        </p>
-        ${files.length > 0 ? `
-          <div class=\"civitai-form-group\" style=\"margin-top: 10px;\">
-            <label for=\"civitai-file-select\">Choose File (optional)</label>
-            <select id=\"civitai-file-select\" class=\"civitai-select\">
-              <option value=\"\">Auto (primary/best)</option>
-              ${files.map(f => {
-                const id = f.id ?? '';
-                const name = (f.name || '').replace(/</g,'&lt;');
-                const fmt = f.format || 'N/A';
-                const prec = (f.precision || '').toUpperCase();
-                const msize = f.model_size || '';
-                const size = (typeof f.size_kb === 'number') ? ui.formatBytes(f.size_kb * 1024) : 'N/A';
-                const disabled = f.downloadable ? '' : 'disabled';
-                const title = f.downloadable ? '' : ' (not downloadable)';
-                const extras = [prec, msize].filter(Boolean).join(' • ');
-                return `<option value=\"${id}\" ${disabled}>#${id} • ${name} • ${fmt}${extras ? ' • ' + extras : ''} • ${size}${title}</option>`;
-              }).join('')}
-            </select>
-            <p style=\"font-size: 0.9em; color: #aaa; margin-top: 6px;\">Pick other variants when available.</p>
-          </div>
-        ` : ''}
-        <a href="${civitaiLink}" target="_blank" rel="noopener noreferrer" class="civitai-button small" title="Open on Civitai website" style="margin-top: 5px; display: inline-block;">
-          View on Civitai <i class="fas fa-external-link-alt"></i>
+  // --- Image gallery ---
+  let galleryHTML = '';
+  if (images.length > 0) {
+    galleryHTML = `<div class="civitai-preview-gallery">
+      ${images.slice(0, 6).map((img, i) => {
+        const nsfwLvl = img.nsfwLevel || 0;
+        const shouldBlur = ui.settings?.hideMatureInSearch && nsfwLvl >= (ui.settings?.nsfwBlurMinLevel ?? 4);
+        const blurClass = shouldBlur ? ' blurred' : '';
+        const overlay = shouldBlur ? '<div class="civitai-nsfw-overlay">R</div>' : '';
+        if (img.type === 'video') {
+          return `<div class="civitai-gallery-item${blurClass}" data-nsfw-level="${nsfwLvl}">
+            <video class="civitai-hover-video" src="${img.url}" muted loop playsinline preload="metadata"></video>
+            ${overlay}</div>`;
+        }
+        const url = img.url.includes('/width=') ? img.url : `${img.url}/width=400`;
+        return `<div class="civitai-gallery-item${blurClass}" data-nsfw-level="${nsfwLvl}">
+          <img src="${url}" loading="lazy" onerror="this.style.display='none';">
+          ${overlay}</div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // --- Status banner ---
+  let statusBanner = '';
+  if (isEA) {
+    statusBanner = `<div class="civitai-ea-banner"><i class="fas fa-lock"></i> Early Access${eaDeadline ? ' — releases ' + new Date(eaDeadline).toLocaleDateString() : ''}</div>`;
+  } else if (alreadyDl) {
+    statusBanner = `<div class="civitai-installed-banner"><i class="fas fa-check-circle"></i> Already installed</div>`;
+  }
+
+  // --- File selector ---
+  let fileSelect = '';
+  if (files.length > 1) {
+    fileSelect = `<div class="civitai-form-group" style="margin-top:10px;">
+      <label>File variant</label>
+      <select id="civitai-file-select" class="civitai-select">
+        <option value="">Auto (primary)</option>
+        ${files.map(f => {
+          const sz = typeof f.size_kb === 'number' ? ui.formatBytes(f.size_kb * 1024) : '?';
+          return `<option value="${f.id || ''}" ${!f.downloadable ? 'disabled' : ''}>${f.name || '?'} — ${f.format || ''} ${sz}</option>`;
+        }).join('')}
+      </select>
+    </div>`;
+  }
+
+  // --- Trained words ---
+  let twHTML = '';
+  if (trainedWords.length) {
+    twHTML = `<div class="civitai-trained-words"><strong>Trigger words:</strong> ${trainedWords.map(w => `<code>${w}</code>`).join(' ')}</div>`;
+  }
+
+  const html = `
+    ${statusBanner}
+    <div class="civitai-preview-header">
+      <div class="civitai-preview-title-row">
+        <h3>${name}</h3>
+        <a href="${civLink}" target="_blank" rel="noopener" class="civitai-button small" title="View on Civitai">
+          <i class="fas fa-external-link-alt"></i> Civitai
         </a>
       </div>
-    </div>
-    <div style="margin-top: 15px;">
-      <h5 style="margin-bottom: 5px;">Model Description:</h5>
-      <div class="model-description-content" style="max-height: 200px; overflow-y: auto; background-color: var(--comfy-input-bg); padding: 10px; border-radius: 4px; font-size: 0.9em; border: 1px solid var(--border-color, #555);">
-        ${descriptionHtml}
+      <div class="civitai-preview-meta">
+        <span><i class="fas fa-user"></i> ${creator}</span>
+        <span class="civitai-type-pill">${mtype}</span>
+        <span><i class="fas fa-download"></i> ${(stats.downloads||0).toLocaleString()}</span>
+        <span><i class="fas fa-thumbs-up"></i> ${(stats.likes||0).toLocaleString()}</span>
       </div>
     </div>
-    <div style="margin-top: 15px;">
-      <h5 style="margin-bottom: 5px;">Version Description:</h5>
-      <div class="model-description-content" style="max-height: 200px; overflow-y: auto; background-color: var(--comfy-input-bg); padding: 10px; border-radius: 4px; font-size: 0.9em; border: 1px solid var(--border-color, #555);">
-        ${version_description_html}
-      </div>
+
+    <div class="civitai-preview-version-row">
+      <label>Version:</label>
+      <select id="civitai-version-select" class="civitai-select">${versionOptions}</select>
+      <span class="base-model-badge">${bm}</span>
     </div>
+
+    ${galleryHTML}
+    ${twHTML}
+
+    <div class="civitai-preview-file-info">
+      <span><strong>${fi.name || 'N/A'}</strong></span>
+      <span>${ui.formatBytes((fi.size_kb||0)*1024)}</span>
+      <span>${fi.format || ''}</span>
+      <span>${fi.precision || ''}</span>
+      <span>${fi.model_size || ''}</span>
+    </div>
+    ${fileSelect}
+
+    ${desc ? `<details class="civitai-preview-desc"><summary>Description</summary><div class="model-description-content">${desc}</div></details>` : ''}
+    ${vdesc ? `<details class="civitai-preview-desc"><summary>Version Notes</summary><div class="model-description-content">${vdesc}</div></details>` : ''}
   `;
 
-  ui.downloadPreviewArea.innerHTML = previewHtml;
+  ui.downloadPreviewArea.innerHTML = html;
+
+  // Update hidden version ID field
+  const hiddenVid = ui.modal.querySelector('#civitai-model-version-id');
+  if (hiddenVid) hiddenVid.value = vid || '';
+
+  // Version selector change -> reload preview
+  const vsel = ui.downloadPreviewArea.querySelector('#civitai-version-select');
+  if (vsel) {
+    vsel.addEventListener('change', () => {
+      if (hiddenVid) hiddenVid.value = vsel.value;
+      ui.fetchAndDisplayDownloadPreview();
+    });
+  }
+
+  // Hover video
+  ui.downloadPreviewArea.querySelectorAll('.civitai-hover-video').forEach(v => {
+    const p = v.closest('.civitai-gallery-item');
+    if (p) {
+      p.addEventListener('mouseenter', () => { try { v.play(); } catch(_){} });
+      p.addEventListener('mouseleave', () => { try { v.pause(); v.currentTime = 0; } catch(_){} });
+    }
+  });
+
+  // Blur toggle
+  ui.downloadPreviewArea.querySelectorAll('.civitai-gallery-item.blurred').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => {
+      el.classList.toggle('blurred');
+      const ov = el.querySelector('.civitai-nsfw-overlay');
+      if (ov) ov.style.display = el.classList.contains('blurred') ? '' : 'none';
+    });
+  });
+
+  // Download button state
+  if (ui.downloadSubmitButton) {
+    if (isEA) {
+      ui.downloadSubmitButton.disabled = true;
+      ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn civitai-btn-ea';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-lock"></i> Early Access — Not Available';
+    } else if (alreadyDl) {
+      ui.downloadSubmitButton.disabled = true;
+      ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn civitai-btn-installed';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+    } else {
+      ui.downloadSubmitButton.disabled = false;
+      ui.downloadSubmitButton.className = 'civitai-button primary civitai-download-btn';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-download"></i> Download';
+    }
+  }
 }

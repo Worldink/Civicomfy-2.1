@@ -1,164 +1,77 @@
-// API client for Civicomfy UI
-// Wraps ComfyUI's fetchApi with consistent error handling
-
 import { api } from "../../../../scripts/api.js";
 
 export class CivitaiDownloaderAPI {
-  static async _request(endpoint, options = {}) {
+  static async _req(ep, opts = {}) {
     try {
-      const url = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-      const response = await api.fetchApi(url, options);
+      const url = ep.startsWith("/") ? ep : `/${ep}`;
+      const r = await api.fetchApi(url, opts);
 
-      if (!response.ok) {
-        let errorData;
-        const status = response.status;
-        const statusText = response.statusText;
+      if (!r.ok) {
+        // Try multiple ways to extract error info
+        let errorMsg = `HTTP ${r.status}`;
+        let details = "";
         try {
-          errorData = await response.json();
-          if (typeof errorData !== "object" || errorData === null) {
-            errorData = { detail: String(errorData) };
-          }
+          const d = await r.json();
+          errorMsg = d.error || d.reason || d.message || errorMsg;
+          details = d.details || d.detail || d.error || "";
         } catch (_) {
-          const detailText = await response.text().catch(() => `Status ${status} - Could not read error text`);
-          errorData = {
-            error: `HTTP error ${status}`,
-            details: String(detailText).substring(0, 500),
-          };
+          try {
+            const txt = await r.text();
+            // aiohttp HTTPError returns HTML with reason in title/body
+            const reasonMatch = txt.match(/(?:<title>|<h1>)\d+:\s*(.+?)(?:<\/title>|<\/h1>)/i);
+            if (reasonMatch) errorMsg = reasonMatch[1];
+            else if (txt.length < 200) details = txt;
+          } catch (_2) {}
         }
-        const err = new Error(errorData.error || errorData.reason || `HTTP Error: ${status} ${statusText}`);
-        err.details = errorData.details || errorData.detail || errorData.error || "No details provided.";
-        err.status = status;
-        throw err;
+        const e = new Error(errorMsg);
+        e.details = details || errorMsg;
+        e.status = r.status;
+        throw e;
       }
 
-      if (response.status === 204 || response.headers.get("Content-Length") === "0") {
-        return null;
-      }
-      return await response.json();
-    } catch (error) {
-      if (!error.details) error.details = error.message;
-      throw error;
+      if (r.status === 204 || r.headers.get("Content-Length") === "0") return null;
+      return await r.json();
+    } catch (e) {
+      if (!e.details) e.details = e.message;
+      throw e;
     }
   }
 
-  static async downloadModel(params) {
-    return await this._request("/civitai/download", {
+  static _post(u, b) {
+    return this._req(u, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
+      body: JSON.stringify(b),
     });
   }
 
-  static async getModelDetails(params) {
-    return await this._request("/civitai/get_model_details", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    });
-  }
+  // Search
+  static searchModels(p)     { return this._post("/civitai/search", p); }
+  static getBaseModels()      { return this._req("/civitai/base_models"); }
+  static getModelTypes()      { return this._req("/civitai/model_types"); }
 
-  static async getStatus() {
-    return await this._request("/civitai/status");
-  }
+  // Model details / Download
+  static getModelDetails(p)   { return this._post("/civitai/get_model_details", p); }
+  static downloadModel(p)     { return this._post("/civitai/download", p); }
+  static cancelDownload(id)   { return this._post("/civitai/cancel", { download_id: id }); }
+  static retryDownload(id)    { return this._post("/civitai/retry", { download_id: id }); }
 
-  static async cancelDownload(downloadId) {
-    return await this._request("/civitai/cancel", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ download_id: downloadId }),
-    });
-  }
+  // Status
+  static getStatus()          { return this._req("/civitai/status"); }
+  static clearHistory()       { return this._post("/civitai/clear_history", {}); }
+  static openPath(id)         { return this._post("/civitai/open_path", { download_id: id }); }
 
-  static async searchModels(params) {
-    return await this._request("/civitai/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    });
-  }
+  // Dirs
+  static getModelDirs(t)      { return this._req(`/civitai/model_dirs?type=${encodeURIComponent(t||'checkpoints')}`); }
+  static createModelType(n)   { return this._post("/civitai/create_model_type", { name: n }); }
+  static getGlobalRoot()      { return this._req("/civitai/global_root"); }
+  static setGlobalRoot(p)     { return this._post("/civitai/global_root", { path: p }); }
+  static clearGlobalRoot()    { return this._post("/civitai/global_root/clear", {}); }
 
-  static async getBaseModels() {
-    return await this._request("/civitai/base_models");
-  }
+  // Library
+  static scanModels()         { return this._req("/civitai/scan_models"); }
+  static deleteModel(p)       { return this._post("/civitai/delete_model", { abs_path: p }); }
 
-  static async getModelTypes() {
-    return await this._request("/civitai/model_types");
-  }
-
-  static async getModelDirs(modelType) {
-    const q = encodeURIComponent(modelType || 'checkpoints');
-    return await this._request(`/civitai/model_dirs?type=${q}`);
-  }
-
-  static async createModelDir(modelType, newDir, root = "") {
-    return await this._request("/civitai/create_dir", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model_type: modelType, new_dir: newDir, root }),
-    });
-  }
-
-  static async createModelType(name) {
-    return await this._request("/civitai/create_model_type", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-  }
-
-  static async getModelRoots(modelType) {
-    const q = encodeURIComponent(modelType || 'checkpoints');
-    return await this._request(`/civitai/model_roots?type=${q}`);
-  }
-
-  static async createModelRoot(modelType, absPath) {
-    return await this._request("/civitai/create_root", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model_type: modelType, path: absPath }),
-    });
-  }
-
-  static async getGlobalRoot() {
-    return await this._request("/civitai/global_root");
-  }
-
-  static async setGlobalRoot(path) {
-    return await this._request("/civitai/global_root", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
-    });
-  }
-
-  static async clearGlobalRoot() {
-    return await this._request("/civitai/global_root/clear", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-  }
-
-  static async retryDownload(downloadId) {
-    return await this._request("/civitai/retry", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ download_id: downloadId }),
-    });
-  }
-
-  static async openPath(downloadId) {
-    return await this._request("/civitai/open_path", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ download_id: downloadId }),
-    });
-  }
-
-  static async clearHistory() {
-    return await this._request("/civitai/clear_history", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  // Status check
+  static checkCivitaiStatus() { return this._req("/civitai/check_status"); }
 }

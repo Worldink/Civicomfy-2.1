@@ -1,113 +1,164 @@
-// Renders active/queued/history download lists
+/**
+ * Download status renderer with smart DOM diffing.
+ * Only updates elements that changed — thumbnails never reload/flash.
+ */
+const PH = `/extensions/Civicomfy/images/placeholder.jpeg`;
 
-const PLACEHOLDER_IMAGE_URL = `/extensions/Civicomfy/images/placeholder.jpeg`;
+// Track what we've rendered per container to avoid full re-renders
+const _rendered = new WeakMap();
 
-export function renderDownloadList(ui, items, container, emptyMessage) {
-  if (!items || items.length === 0) {
-    container.innerHTML = `<p>${emptyMessage}</p>`;
+export function renderDownloadList(ui, items, container, emptyMsg) {
+  if (!items?.length) {
+    container.innerHTML = `<p>${emptyMsg}</p>`;
+    _rendered.delete(container);
     return;
   }
 
-  const fragment = document.createDocumentFragment();
+  const prev = _rendered.get(container) || {};
+  const newMap = {};
+  const frag = document.createDocumentFragment();
+  let changed = false;
+
   items.forEach(item => {
-    const id = item.id || 'unknown-id';
-    const progress = item.progress !== undefined ? Math.max(0, Math.min(100, item.progress)) : 0;
-    const speed = item.speed !== undefined ? Math.max(0, item.speed) : 0;
-    const status = item.status || 'unknown';
-    const size = item.known_size !== undefined && item.known_size !== null ? item.known_size : (item.file_size || 0);
-    const downloadedBytes = size > 0 ? size * (progress / 100) : 0;
-    const errorMsg = item.error || null;
-    const modelName = item.model_name || item.model?.name || 'Unknown Model';
-    const versionName = item.version_name || 'Unknown Version';
-    const filename = item.filename || 'N/A';
-    const addedTime = item.added_time || null;
-    const startTime = item.start_time || null;
-    const endTime = item.end_time || null;
-    const thumbnail = item.thumbnail || PLACEHOLDER_IMAGE_URL;
-    const nsfwLevel = Number(item.thumbnail_nsfw_level ?? 0);
-    const blurMinLevel = Number(ui.settings?.nsfwBlurMinLevel ?? 4);
-    const shouldBlur = ui.settings?.hideMatureInSearch === true && nsfwLevel >= blurMinLevel;
-    const connectionType = item.connection_type || "N/A";
+    const id = item.id || '?';
+    // Build a signature of the data that affects rendering
+    const sig = `${item.status}|${Math.round(item.progress || 0)}|${Math.round(item.speed || 0)}|${item.error || ''}`;
+    newMap[id] = sig;
 
-    let progressBarClass = '';
-    let statusText = status.charAt(0).toUpperCase() + status.slice(1);
-    switch (status) {
-      case 'completed': progressBarClass = 'completed'; break;
-      case 'failed': progressBarClass = 'failed'; statusText = 'Failed'; break;
-      case 'cancelled': progressBarClass = 'cancelled'; statusText = 'Cancelled'; break;
-      case 'downloading': case 'queued': case 'starting': default: break;
+    // If this item exists and hasn't changed, keep the existing DOM node
+    const existingEl = container.querySelector(`.civitai-download-item[data-id="${id}"]`);
+    if (existingEl && prev[id] === sig) {
+      frag.appendChild(existingEl);
+      return;
     }
 
-    const listItem = document.createElement('div');
-    listItem.className = 'civitai-download-item';
-    listItem.dataset.id = id;
-
-    const onErrorScript = `this.onerror=null; this.src='${PLACEHOLDER_IMAGE_URL}'; this.style.backgroundColor='#444';`;
-    const addedTooltip = addedTime ? `data-tooltip="Added: ${new Date(addedTime).toLocaleString()}"` : '';
-    const startedTooltip = startTime ? `data-tooltip="Started: ${new Date(startTime).toLocaleString()}"` : '';
-    const endedTooltip = endTime ? `data-tooltip="Ended: ${new Date(endTime).toLocaleString()}"` : '';
-    const durationTooltip = startTime && endTime ? `data-tooltip="Duration: ${ui.formatDuration(startTime, endTime)}"` : '';
-    const filenameTooltip = filename !== 'N/A' ? `title="Filename: ${filename}"` : '';
-    const errorTooltip = errorMsg ? `title="Error Details: ${String(errorMsg).substring(0, 200)}${String(errorMsg).length > 200 ? '...' : ''}"` : '';
-    const connectionInfoHtml = connectionType !== "N/A" ? `<span style="font-size: 0.85em; color: #aaa; margin-left: 10px;">(Conn: ${connectionType})</span>` : '';
-
-    const overlayHtml = shouldBlur ? `<div class=\"civitai-nsfw-overlay\" title=\"R-rated: click to reveal\">R</div>` : '';
-    const containerClasses = `civitai-thumbnail-container${shouldBlur ? ' blurred' : ''}`;
-
-    let innerHTML = `
-      <div class="${containerClasses}" data-nsfw-level="${Number.isFinite(nsfwLevel) ? nsfwLevel : ''}">
-        <img src="${thumbnail}" alt="thumbnail" class="civitai-download-thumbnail" loading="lazy" onerror="${onErrorScript}">
-        ${overlayHtml}
-      </div>
-      <div class="civitai-download-info">
-        <strong>${modelName}</strong>
-        <p>Ver: ${versionName}</p>
-        <p class="filename" ${filenameTooltip}>${filename}</p>
-        ${size > 0 ? `<p>Size: ${ui.formatBytes(size)}</p>` : ''}
-        ${item.file_format ? `<p>Format: ${item.file_format}</p>` : ''}
-        ${item.file_precision || item.file_model_size ? `<p>${item.file_precision ? 'Precision: ' + String(item.file_precision).toUpperCase() : ''}${item.file_precision && item.file_model_size ? ' • ' : ''}${item.file_model_size ? 'Model Size: ' + item.file_model_size : ''}</p>` : ''}
-        ${errorMsg ? `<p class="error-message" ${errorTooltip}><i class="fas fa-exclamation-triangle"></i> ${String(errorMsg).substring(0, 100)}${String(errorMsg).length > 100 ? '...' : ''}</p>` : ''}
-    `;
-
-    if (status === 'downloading' || status === 'starting' || status === 'completed') {
-      const statusLine = `<div ${durationTooltip} ${endedTooltip}>Status: ${statusText} ${connectionInfoHtml}</div>`;
-      innerHTML += `
-        <div class="civitai-progress-container" title="${statusText} - ${progress.toFixed(1)}%">
-          <div class="civitai-progress-bar ${progressBarClass}" style="width: ${progress}%;">
-            ${progress > 15 ? progress.toFixed(0)+'%' : ''}
-          </div>
-        </div>
-      `;
-      const speedText = (status === 'downloading' && speed > 0) ? ui.formatSpeed(speed) : '';
-      const progressText = (status === 'downloading' && size > 0) ? `(${ui.formatBytes(downloadedBytes)} / ${ui.formatBytes(size)})` : '';
-      const completedText = status === 'completed' ? '' : '';
-      const speedProgLine = `<div class="civitai-speed-indicator">${speedText} ${progressText} ${completedText}</div>`;
-      if (status === 'downloading') { innerHTML += speedProgLine; }
-      innerHTML += statusLine;
-    } else if (status === 'failed' || status === 'cancelled' || status === 'queued') {
-      innerHTML += `<div class="status-line-simple" ${durationTooltip} ${endedTooltip} ${addedTooltip}>Status: ${statusText} ${connectionInfoHtml}</div>`;
-    } else {
-      innerHTML += `<div class="status-line-simple">Status: ${statusText} ${connectionInfoHtml}</div>`;
+    // If item exists but data changed, update in-place for progress items
+    if (existingEl && prev[id] && item.status === 'downloading') {
+      _updateInPlace(ui, existingEl, item);
+      frag.appendChild(existingEl);
+      newMap[id] = sig;
+      changed = true;
+      return;
     }
 
-    innerHTML += `</div>`;
-    innerHTML += `<div class="civitai-download-actions">`;
-    if (status === 'queued' || status === 'downloading' || status === 'starting') {
-      innerHTML += `<button class="civitai-button danger small civitai-cancel-button" data-id="${id}" title="Cancel Download"><i class="fas fa-times"></i></button>`;
-    }
-    if (status === 'failed' || status === 'cancelled') {
-      innerHTML += `<button class="civitai-button small civitai-retry-button" data-id="${id}" title="Retry Download"><i class="fas fa-redo"></i></button>`;
-    }
-    if (status === 'completed') {
-      innerHTML += `<button class="civitai-button small civitai-openpath-button" data-id="${id}" title="Open Containing Folder"><i class="fas fa-folder-open"></i></button>`;
-    }
-    innerHTML += `</div>`;
-
-    listItem.innerHTML = innerHTML;
-    fragment.appendChild(listItem);
+    // New item or significant change — create fresh element
+    const el = _createItem(ui, item);
+    frag.appendChild(el);
+    changed = true;
   });
 
-  container.innerHTML = '';
-  container.appendChild(fragment);
-  ui.ensureFontAwesome();
+  // Check if items were removed
+  if (Object.keys(prev).length !== Object.keys(newMap).length) {
+    changed = true;
+  }
+
+  if (changed || container.children.length !== items.length) {
+    container.innerHTML = '';
+    container.appendChild(frag);
+    _setupHoverVideo(container);
+    ui.ensureFontAwesome();
+  }
+
+  _rendered.set(container, newMap);
+}
+
+function _updateInPlace(ui, el, item) {
+  // Update progress bar width
+  const bar = el.querySelector('.civitai-progress-bar');
+  const pct = Math.max(0, Math.min(100, item.progress || 0));
+  if (bar) {
+    bar.style.width = `${pct}%`;
+    bar.textContent = pct > 12 ? `${pct.toFixed(0)}%` : '';
+  }
+
+  // Update progress detail text
+  const detail = el.querySelector('.civitai-progress-detail');
+  if (detail) {
+    const total = item.known_size || 0;
+    const dl = total > 0 ? total * pct / 100 : 0;
+    const speed = Math.max(0, item.speed || 0);
+    let eta = '';
+    if (speed > 0 && total > 0) {
+      const sec = (total - dl) / speed;
+      eta = sec < 60 ? `~${Math.round(sec)}s` : sec < 3600 ? `~${Math.floor(sec/60)}m ${Math.round(sec%60)}s` : `~${Math.floor(sec/3600)}h`;
+    }
+    const dlText = total > 0 ? `${ui.formatBytes(dl)} / ${ui.formatBytes(total)}` : '';
+    const left = detail.querySelector('.civitai-dl-left');
+    const right = detail.querySelector('.civitai-dl-right');
+    if (left) left.textContent = `${pct.toFixed(1)}%${dlText ? ' — ' + dlText : ''}`;
+    if (right) right.textContent = `${speed > 0 ? ui.formatSpeed(speed) : ''}${eta ? ' — ' + eta : ''}`;
+  }
+}
+
+function _createItem(ui, item) {
+  const id = item.id || '?';
+  const pct = Math.max(0, Math.min(100, item.progress || 0));
+  const speed = Math.max(0, item.speed || 0);
+  const st = item.status || 'unknown';
+  const total = item.known_size || 0;
+  const dl = total > 0 ? total * pct / 100 : 0;
+  const err = item.error;
+  const fname = item.filename || 'N/A';
+  const thumb = item.thumbnail || PH;
+  const thumbType = item.thumbnail_type || 'image';
+
+  let eta = '';
+  if (st === 'downloading' && speed > 0 && total > 0) {
+    const sec = (total - dl) / speed;
+    eta = sec < 60 ? `~${Math.round(sec)}s` : sec < 3600 ? `~${Math.floor(sec/60)}m ${Math.round(sec%60)}s` : `~${Math.floor(sec/3600)}h`;
+  }
+
+  const barCls = st === 'completed' ? 'completed' : st === 'failed' ? 'failed' : st === 'cancelled' ? 'cancelled' : '';
+
+  const el = document.createElement('div');
+  el.className = 'civitai-download-item';
+  el.dataset.id = id;
+
+  let thumbHTML;
+  if (thumbType === 'video' && thumb) {
+    thumbHTML = `<video class="civitai-thumb-media civitai-hover-video" src="${thumb}" muted loop playsinline preload="metadata"></video>`;
+  } else {
+    thumbHTML = `<img src="${thumb}" class="civitai-thumb-media" loading="lazy" onerror="this.src='${PH}';">`;
+  }
+
+  let h = `
+    <div class="civitai-thumbnail-container" style="width:60px;height:60px;">
+      ${thumbHTML}
+    </div>
+    <div class="civitai-download-info">
+      <strong>${item.model_name || 'Model'}</strong>
+      ${item.version_name ? `<p>${item.version_name}</p>` : ''}
+      <p class="filename">${fname}</p>
+      ${err ? `<p class="error-message"><i class="fas fa-exclamation-triangle"></i> ${String(err).substring(0,120)}</p>` : ''}`;
+
+  if (st === 'downloading' || st === 'starting' || st === 'completed') {
+    const dlText = total > 0 ? `${ui.formatBytes(dl)} / ${ui.formatBytes(total)}` : '';
+    h += `<div class="civitai-progress-container"><div class="civitai-progress-bar ${barCls}" style="width:${pct}%;">${pct > 12 ? pct.toFixed(0)+'%' : ''}</div></div>
+      <div class="civitai-progress-detail"><span class="civitai-dl-left">${pct.toFixed(1)}%${dlText ? ' — ' + dlText : ''}</span><span class="civitai-dl-right">${st === 'downloading' && speed > 0 ? ui.formatSpeed(speed) : ''}${eta ? ' — ' + eta : ''}</span></div>`;
+  } else {
+    h += `<div class="status-line-simple">${st.charAt(0).toUpperCase() + st.slice(1)}</div>`;
+  }
+
+  h += `</div><div class="civitai-download-actions">`;
+  if (['queued','downloading','starting'].includes(st))
+    h += `<button class="civitai-button danger small civitai-cancel-button" data-id="${id}" title="Cancel"><i class="fas fa-times"></i></button>`;
+  if (['failed','cancelled'].includes(st))
+    h += `<button class="civitai-button small civitai-retry-button" data-id="${id}" title="Retry"><i class="fas fa-redo"></i></button>`;
+  if (st === 'completed')
+    h += `<button class="civitai-button small civitai-openpath-button" data-id="${id}" title="Open Folder"><i class="fas fa-folder-open"></i></button>`;
+  h += `</div>`;
+
+  el.innerHTML = h;
+  return el;
+}
+
+function _setupHoverVideo(container) {
+  container.querySelectorAll('.civitai-hover-video').forEach(v => {
+    const p = v.closest('.civitai-thumbnail-container');
+    if (p && !p._hoverBound) {
+      p._hoverBound = true;
+      p.addEventListener('mouseenter', () => { try { v.play(); } catch(_){} });
+      p.addEventListener('mouseleave', () => { try { v.pause(); v.currentTime = 0; } catch(_){} });
+    }
+  });
 }

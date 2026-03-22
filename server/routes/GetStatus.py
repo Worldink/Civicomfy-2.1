@@ -1,19 +1,14 @@
-# ================================================
-# File: server/routes/GetStatus.py
-# ================================================
+"""Get download status."""
 from aiohttp import web
-import server # ComfyUI server instance
-from ...downloader.manager import manager as download_manager
+import server as comfy_server
+from ...downloader.manager import manager
 
-prompt_server = server.PromptServer.instance
+ps = comfy_server.PromptServer.instance
 
-@prompt_server.routes.get("/civitai/status")
-async def route_get_status(request):
-    """API Endpoint to get the status of downloads."""
+
+@ps.routes.get("/civitai/status")
+async def route_status(request):
     try:
-        status = download_manager.get_status()
-        return web.json_response(status)
+        return web.json_response(manager.get_status())
     except Exception as e:
-        print(f"Error getting download status: {e}")
-        # Format error response consistently
-        return web.json_response({"error": "Internal Server Error", "details": f"Failed to get status: {str(e)}", "status_code": 500}, status=500)
+        return web.json_response({"error": str(e)}, status=500)

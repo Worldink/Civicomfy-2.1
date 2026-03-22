@@ -1,41 +1,24 @@
-// Centralized feedback utilities: toasts and icon CSS
-
 export class Feedback {
-  constructor(toastElement) {
-    this.toastElement = toastElement || null;
-    this.toastTimeout = null;
+  constructor(el) {
+    this.el = el;
+    this._t = null;
   }
-
   ensureFontAwesome() {
-    if (!document.getElementById('civitai-fontawesome-link')) {
-      const faLink = document.createElement('link');
-      faLink.id = 'civitai-fontawesome-link';
-      faLink.rel = 'stylesheet';
-      faLink.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css';
-      faLink.integrity = 'sha512-1ycn6IcaQQ40/MKBW2W4Rhis/DbILU74C1vSrLJxCq57o941Ym01SwNsOMqvEBFlcgUa6xLiPY/NS5R+E6ztJQ==';
-      faLink.crossOrigin = 'anonymous';
-      faLink.referrerPolicy = 'no-referrer';
-      document.head.appendChild(faLink);
+    if (!document.getElementById('civitai-fa-link')) {
+      const l = document.createElement('link');
+      l.id = 'civitai-fa-link';
+      l.rel = 'stylesheet';
+      l.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css';
+      l.crossOrigin = 'anonymous';
+      document.head.appendChild(l);
     }
   }
-
-  show(message, type = 'info', duration = 3000) {
-    if (!this.toastElement) return;
-    if (this.toastTimeout) {
-      clearTimeout(this.toastTimeout);
-      this.toastTimeout = null;
-    }
-    const valid = ['info', 'success', 'error', 'warning'];
-    const toastType = valid.includes(type) ? type : 'info';
-
-    this.toastElement.textContent = message;
-    this.toastElement.className = 'civitai-toast';
-    this.toastElement.classList.add(toastType);
-    requestAnimationFrame(() => this.toastElement.classList.add('show'));
-    this.toastTimeout = setTimeout(() => {
-      this.toastElement.classList.remove('show');
-      this.toastTimeout = null;
-    }, duration);
+  show(msg, type = 'info', dur = 3000) {
+    if (!this.el) return;
+    if (this._t) clearTimeout(this._t);
+    this.el.textContent = msg;
+    this.el.className = `civitai-toast ${type}`;
+    requestAnimationFrame(() => this.el.classList.add('show'));
+    this._t = setTimeout(() => { this.el.classList.remove('show'); this._t = null; }, dur);
   }
 }
-

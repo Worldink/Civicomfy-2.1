@@ -1,192 +1,182 @@
-# ================================================
-# File: server/routes/GetModelDetails.py
-# ================================================
+"""Model details: all versions, images, installed check, robust EA. All JSON responses."""
+import asyncio
 import os
 import json
 import traceback
 from aiohttp import web
-
-import server # ComfyUI server instance
-from ..utils import get_request_json, get_civitai_model_and_version_details, resolve_civitai_api_key
+import server as comfy_server
+import folder_paths
+from ..utils import get_request_json, resolve_api_key, is_early_access
 from ...api.civitai import CivitaiAPI
-from ...config import PLACEHOLDER_IMAGE_PATH
+from ...utils.helpers import guess_precision, parse_civitai_input, select_primary_file
+from ...config import METADATA_SUFFIX
 
-prompt_server = server.PromptServer.instance
+ps = comfy_server.PromptServer.instance
+_MODEL_EXTS = ('.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.onnx', '.gguf')
 
-@prompt_server.routes.post("/civitai/get_model_details")
-async def route_get_model_details(request):
-    """API Endpoint to fetch model/version details for preview."""
-    try:
-        data = await get_request_json(request)
-        model_url_or_id = data.get("model_url_or_id")
-        req_version_id = data.get("model_version_id") # Optional explicit version ID
-        resolved_api_key = resolve_civitai_api_key(data)
 
-        if not model_url_or_id:
-            raise web.HTTPBadRequest(reason="Missing 'model_url_or_id'")
-
-        # API key priority: request payload > CIVITAI_API_KEY env var
-        api = CivitaiAPI(resolved_api_key)
-
-        # Use the helper to get details
-        details = await get_civitai_model_and_version_details(api, model_url_or_id, req_version_id)
-        model_info = details['model_info']
-        version_info = details['version_info']
-        primary_file = details['primary_file']
-        target_model_id = details['target_model_id']
-        target_version_id = details['target_version_id']
-
-        # --- Extract Data for Frontend Preview ---
-        model_name = model_info.get('name')
-        creator_username = model_info.get('creator', {}).get('username', 'Unknown Creator')
-        model_type = model_info.get('type', 'Unknown') # Checkpoint, LORA etc.
-
-        stats = model_info.get('stats', version_info.get('stats', {})) # Ensure stats is a dict
-        download_count = stats.get('downloadCount', 0)
-        likes_count = stats.get('thumbsUpCount', 0)
-        dislikes_count = stats.get('thumbsDownCount', 0)
-        buzz_count = stats.get('tippedAmountCount', 0)
-        
-
-        # Get description from model_info (version description might be update notes)
-        # Handle potential None value for description
-        description_html = model_info.get('description')
-        if description_html is None:
-            description_html = "<p><em>No description provided.</em></p>"
-        else:
-            # Basic sanitization/check (could be more robust if needed)
-            if not isinstance(description_html, str):
-                 description_html = "<p><em>Invalid description format.</em></p>"
-            elif not description_html.strip():
-                 description_html = "<p><em>Description is empty.</em></p>"
-        
-        version_description_html = version_info.get('description')
-        if version_description_html is None:
-            version_description_html = "<p><em>No description provided.</em></p>"
-        else:
-            # Basic sanitization/check (could be more robust if needed)
-            if not isinstance(version_description_html, str):
-                 version_description_html = "<p><em>Invalid description format.</em></p>"
-            elif not version_description_html.strip():
-                 version_description_html = "<p><em>Description is empty.</em></p>"
-
-        # File details
-        def _guess_precision(file_dict):
+def _scan_installed():
+    """Set of (model_id, version_id) tuples. Only if model file exists."""
+    installed = set()
+    models_dir = getattr(folder_paths, 'models_dir', None)
+    if not models_dir:
+        models_dir = os.path.join(getattr(folder_paths, 'base_path', os.getcwd()), 'models')
+    if not os.path.isdir(models_dir):
+        return installed
+    for root, _, files in os.walk(models_dir):
+        for f in files:
+            if not f.endswith(METADATA_SUFFIX):
+                continue
+            fp = os.path.join(root, f)
             try:
-                name = (file_dict.get('name') or '').lower()
-                meta = (file_dict.get('metadata') or {})
-                for key in ('precision', 'dtype', 'fp'):
-                    val = (meta.get(key) or '').lower()
-                    if val:
-                        return val
-                if 'fp8' in name or 'int8' in name or '8bit' in name or '8-bit' in name:
-                    return 'fp8'
-                if 'fp16' in name or 'bf16' in name or '16bit' in name or '16-bit' in name:
-                    return 'fp16'
-                if 'fp32' in name or '32bit' in name or '32-bit' in name:
-                    return 'fp32'
+                with open(fp, 'r', encoding='utf-8') as fh:
+                    meta = json.load(fh)
+                mid, vid = meta.get("ModelId"), meta.get("VersionId")
+                if not mid or not vid:
+                    continue
+                base = fp[:-len(METADATA_SUFFIX)]
+                if any(os.path.isfile(base + ext) for ext in _MODEL_EXTS):
+                    installed.add((int(mid), int(vid)))
             except Exception:
                 pass
-            return 'N/A'
+    return installed
 
-        file_name = primary_file.get('name', 'N/A')
-        file_size_kb = primary_file.get('sizeKB', 0)
-        _meta = (primary_file.get('metadata') or {})
-        file_format = _meta.get('format', 'N/A') # e.g., SafeTensor, PickleTensor
-        file_model_size = _meta.get('size', 'N/A') # e.g., Pruned/Full
-        file_precision = _guess_precision(primary_file)
 
-        thumbnail_url = None
-        images = version_info.get("images") # Get the images list from the version info
-        nsfw_level = None
+@ps.routes.post("/civitai/get_model_details")
+async def route_get_model_details(request):
+    try:
+        data = await get_request_json(request)
+    except Exception:
+        return web.json_response({"success": False, "error": "Invalid request"}, status=400)
 
-        # Check if images list exists, is a list, has items, and the first item is valid with a URL
-        if images and isinstance(images, list) and len(images) > 0 and \
-           isinstance(images[0], dict) and images[0].get("url"):
-            # Use the URL of the very first image directly
-            first_image = images[0]
-            thumbnail_url = first_image["url"]
+    try:
+        url_or_id = data.get("model_url_or_id")
+        req_vid = data.get("model_version_id")
+        if not url_or_id:
+            return web.json_response({"success": False, "error": "Missing model_url_or_id"}, status=400)
+
+        api = CivitaiAPI(resolve_api_key(data))
+
+        # Parse input
+        model_id, version_id = parse_civitai_input(str(url_or_id))
+        if req_vid is not None:
             try:
-                lvl = first_image.get("nsfwLevel")
-                nsfw_level = int(lvl) if lvl is not None else None
-            except Exception:
-                nsfw_level = None
-            print(f"[Get Details Route] Using first image URL as thumbnail: {thumbnail_url}")
-        else:
-            print("[Get Details Route] No valid first image found in version info, falling back to placeholder.")
-            # Fallback placeholder logic (remains the same)
-            placeholder_filename = os.path.basename(PLACEHOLDER_IMAGE_PATH) if PLACEHOLDER_IMAGE_PATH else "placeholder.jpeg"
-            thumbnail_url = f"./{placeholder_filename}" # Relative path for JS to resolve
+                v = int(req_vid)
+                if v > 0:
+                    version_id = v
+            except (ValueError, TypeError):
+                pass
 
+        # Resolve model_id
+        if not model_id and version_id:
+            vi = await asyncio.to_thread(api.get_model_version_info, version_id)
+            if vi and "error" not in vi:
+                model_id = vi.get('modelId')
+        if not model_id:
+            return web.json_response({"success": False, "error": "Cannot determine Model ID"}, status=400)
 
-        # Fallback placeholder if no thumbnail found
-        if not thumbnail_url:
-             placeholder_filename = os.path.basename(PLACEHOLDER_IMAGE_PATH) if PLACEHOLDER_IMAGE_PATH else "placeholder.jpeg"
-             thumbnail_url = f"./{placeholder_filename}" # Relative path for JS
+        # Fetch full model info
+        mi = await asyncio.to_thread(api.get_model_info, model_id)
+        if not mi or "error" in mi:
+            err = mi.get("error", "No response") if isinstance(mi, dict) else "No response from Civitai"
+            return web.json_response({"success": False, "error": f"Cannot fetch model: {err}"}, status=502)
 
-        # Build minimal files listing for selection in UI/clients
+        all_versions_raw = mi.get("modelVersions") or []
+
+        # Default to latest version
+        if not version_id and all_versions_raw:
+            default_v = next((v for v in all_versions_raw if v.get('status') == 'Published'), all_versions_raw[0])
+            version_id = default_v.get('id')
+
+        # Fetch selected version details
+        vi = None
+        if version_id:
+            vi = await asyncio.to_thread(api.get_model_version_info, version_id)
+            if not vi or "error" in vi:
+                vi = next((v for v in all_versions_raw if v.get('id') == version_id), None)
+        if not vi and all_versions_raw:
+            vi = all_versions_raw[0]
+            version_id = vi.get('id')
+        if not vi:
+            return web.json_response({"success": False, "error": "No version data"}, status=404)
+
+        # All versions list with EA check per version
+        all_versions = []
+        for v in all_versions_raw:
+            v_ea, v_deadline = is_early_access(model_info=mi, version_info=v)
+            all_versions.append({
+                "id": v.get("id"),
+                "name": v.get("name", "Unknown"),
+                "baseModel": v.get("baseModel"),
+                "publishedAt": v.get("publishedAt"),
+                "is_early_access": v_ea,
+                "early_access_deadline": v_deadline,
+            })
+
+        # Files for selected version
+        pf = select_primary_file(vi.get("files") or []) or {}
+        pm = pf.get('metadata') or {}
         files_list = []
-        vfiles = version_info.get("files", []) or []
-        if isinstance(vfiles, list):
-            for f in vfiles:
-                if not isinstance(f, dict):
-                    continue
-                _fmeta = (f.get("metadata") or {})
-                files_list.append({
-                    "id": f.get("id"),
-                    "name": f.get("name"),
-                    "size_kb": f.get("sizeKB"),
-                    "format": _fmeta.get("format"),
-                    "model_size": _fmeta.get("size"),
-                    "precision": _guess_precision(f),
-                    "downloadable": bool(f.get("downloadUrl")),
+        for f in (vi.get("files") or []):
+            if not isinstance(f, dict):
+                continue
+            fm = f.get("metadata") or {}
+            files_list.append({
+                "id": f.get("id"), "name": f.get("name"),
+                "size_kb": f.get("sizeKB"), "format": fm.get("format"),
+                "model_size": fm.get("size"), "precision": guess_precision(f),
+                "downloadable": bool(f.get("downloadUrl")),
+            })
+
+        # Images
+        images = []
+        for img in (vi.get("images") or []):
+            if isinstance(img, dict) and img.get("url"):
+                images.append({
+                    "url": img["url"], "type": img.get("type", "image"),
+                    "nsfwLevel": img.get("nsfwLevel", 0),
                 })
 
-        # --- Return curated data ---
+        stats = mi.get('stats') or vi.get('stats') or {}
+
+        # EA for selected version
+        sel_ea, sel_deadline = is_early_access(model_info=mi, version_info=vi)
+
+        # Installed check
+        installed_set = await asyncio.to_thread(_scan_installed)
+        already_dl = (int(model_id), int(version_id)) in installed_set if model_id and version_id else False
+
         return web.json_response({
             "success": True,
-            "model_id": target_model_id,
-            "version_id": target_version_id,
-            "model_name": model_name,
-            "version_name": version_info.get('name', 'Unknown Version'),
-            "creator_username": creator_username,
-            "model_type": model_type,
-            "description_html": description_html, # Send raw HTML (frontend should handle display safely)
-            "version_description_html": version_description_html,
+            "model_id": model_id,
+            "version_id": version_id,
+            "model_name": mi.get('name', 'Unknown'),
+            "version_name": vi.get('name', 'Unknown'),
+            "creator_username": (mi.get('creator') or {}).get('username', 'Unknown'),
+            "model_type": mi.get('type', 'Unknown'),
+            "description_html": mi.get('description') or "",
+            "version_description_html": vi.get('description') or "",
             "stats": {
-                "downloads": download_count,
-                "likes": likes_count,
-                "dislikes": dislikes_count,
-                "buzz": buzz_count,
+                "downloads": stats.get('downloadCount', 0),
+                "likes": stats.get('thumbsUpCount', 0),
+                "dislikes": stats.get('thumbsDownCount', 0),
+                "buzz": stats.get('tippedAmountCount', 0),
             },
             "file_info": {
-                "name": file_name,
-                "size_kb": file_size_kb,
-                "format": file_format,
-                "model_size": file_model_size,
-                "precision": file_precision,
+                "name": pf.get('name', 'N/A'), "size_kb": pf.get('sizeKB', 0),
+                "format": pm.get('format', 'N/A'), "model_size": pm.get('size', 'N/A'),
+                "precision": guess_precision(pf),
             },
             "files": files_list,
-            "thumbnail_url": thumbnail_url,
-            "nsfw_level": nsfw_level,
-            # Optionally include basic version info like baseModel
-            "base_model": version_info.get("baseModel", "N/A"),
-            # You could add tags here too if desired: model_info.get('tags', [])
+            "all_versions": all_versions,
+            "images": images,
+            "base_model": vi.get("baseModel", "N/A"),
+            "trained_words": vi.get("trainedWords", []),
+            "is_early_access": sel_ea,
+            "early_access_deadline": sel_deadline,
+            "already_downloaded": already_dl,
         })
 
-    except web.HTTPError as http_err:
-        # Consistent error handling (copied from route_download_model)
-        print(f"[Server GetDetails] HTTP Error: {http_err.status} {http_err.reason}")
-        body_detail = ""
-        try:
-            body_detail = await http_err.text() if hasattr(http_err, 'text') else http_err.body.decode('utf-8', errors='ignore') if http_err.body else ""
-            if body_detail.startswith('{') and body_detail.endswith('}'): body_detail = json.loads(body_detail)
-        except Exception: pass
-        return web.json_response({"success": False, "error": http_err.reason, "details": body_detail or "No details", "status_code": http_err.status}, status=http_err.status)
-
     except Exception as e:
-        # Consistent error handling (copied from route_download_model)
-        print("--- Unhandled Error in /civitai/get_model_details ---")
         traceback.print_exc()
-        print("--- End Error ---")
-        return web.json_response({"success": False, "error": "Internal Server Error", "details": f"An unexpected error occurred: {str(e)}", "status_code": 500}, status=500)
+        return web.json_response({"success": False, "error": f"Internal error: {str(e)}"}, status=500)
