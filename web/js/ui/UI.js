@@ -28,6 +28,7 @@ export class CivitaiDownloaderUI {
     this._lastPreviewReq = 0;
     this._libraryModels = null;
     this._installedVersions = new Set(); // "modelId:versionId" strings for instant lookup
+    this._completedIds = new Set(); // track already-processed completed download IDs
     this._confirmAction = null;
     this._pendingDelete = null;
 
@@ -114,7 +115,7 @@ export class CivitaiDownloaderUI {
   async initializeUI() {
     await this.populateModelTypes();
     await this.populateBaseModels();
-    this.loadAndApplySettings();
+    await this.loadAndApplySettings();
     await this.loadGlobalRootSetting();
   }
 
@@ -178,7 +179,6 @@ export class CivitaiDownloaderUI {
     this.startStatusUpdates();
     // Auto-scan library in background on every open (fast, non-blocking)
     this.handleLibraryScan(true);
-    if (!this.settings.apiKey) this.switchTab('settings');
   }
 
   closeModal() {
@@ -201,6 +201,8 @@ export class CivitaiDownloaderUI {
     if (this.subfolderInput) this.subfolderInput.value = '';
     const hiddenVid = this.modal?.querySelector('#civitai-model-version-id');
     if (hiddenVid) hiddenVid.value = '';
+    this._previewModelId = null;
+    this._previewVersionId = null;
     if (this.downloadSubmitButton) {
       this.downloadSubmitButton.disabled = false;
       this.downloadSubmitButton.className = 'civitai-button primary civitai-download-btn';

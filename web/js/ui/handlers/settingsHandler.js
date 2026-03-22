@@ -1,37 +1,73 @@
-import { setCookie, getCookie } from "../../utils/cookies.js";
+import { getCookie, setCookie } from "../../utils/cookies.js";
 import { CivitaiDownloaderAPI } from "../../api/civitai.js";
 
-const COOKIE = 'civitaiSettings_v2';
+const _OLD_COOKIE = 'civitaiSettings_v2';
 
 export function getDefaultSettings() {
   return {
-    apiKey: '', numConnections: 1, defaultModelType: 'checkpoints',
+    apiKey: '', defaultModelType: 'checkpoints',
     autoOpenStatusTab: true, searchResultLimit: 20,
     hideMatureInSearch: true, nsfwBlurMinLevel: 4,
   };
 }
 
-export function loadAndApplySettings(ui) {
-  ui.settings = loadSettingsFromCookie(ui);
+/**
+ * Load settings: server file → cookie fallback → defaults.
+ * Migrates cookie settings to server on first load.
+ */
+export async function loadAndApplySettings(ui) {
+  const defaults = getDefaultSettings();
+  let loaded = null;
+
+  // Try server first (persistent)
+  try {
+    loaded = await CivitaiDownloaderAPI.loadSettings();
+  } catch (_) {}
+
+  if (loaded && typeof loaded === 'object' && Object.keys(loaded).length > 0 && !loaded.error) {
+    ui.settings = { ...defaults, ...loaded };
+  } else {
+    // Fallback: try old cookie
+    const raw = getCookie(_OLD_COOKIE);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        ui.settings = { ...defaults, ...parsed };
+        // Migrate to server
+        try { await CivitaiDownloaderAPI.saveSettings(ui.settings); } catch (_) {}
+        // Clear old cookie
+        setCookie(_OLD_COOKIE, '', -1);
+      } catch (_) {
+        ui.settings = defaults;
+      }
+    } else {
+      ui.settings = defaults;
+    }
+  }
+
   applySettings(ui);
 }
 
-export function loadSettingsFromCookie(ui) {
-  const def = getDefaultSettings();
-  const raw = getCookie(COOKIE);
-  if (raw) {
-    try { return { ...def, ...JSON.parse(raw) }; } catch (_) {}
-  }
-  return def;
-}
-
-export function saveSettingsToCookie(ui) {
+/**
+ * Save settings to server (persistent JSON file on disk).
+ */
+export async function saveSettingsToCookie(ui) {
   try {
-    setCookie(COOKIE, JSON.stringify(ui.settings), 365);
-    ui.showToast('Settings saved!', 'success');
-  } catch (_) {
+    const result = await CivitaiDownloaderAPI.saveSettings(ui.settings);
+    if (result?.success) {
+      ui.showToast('Settings saved!', 'success');
+    } else {
+      ui.showToast('Failed to save settings', 'error');
+    }
+  } catch (e) {
+    console.error('[Civicomfy] Settings save failed:', e);
     ui.showToast('Error saving settings', 'error');
   }
+}
+
+export function loadSettingsFromCookie(ui) {
+  // Legacy — loadAndApplySettings handles everything now
+  return ui.settings || getDefaultSettings();
 }
 
 export function applySettings(ui) {
@@ -86,21 +122,20 @@ export function handleSettingsSave(ui) {
   ui.settings.hideMatureInSearch = ui.settingsHideMatureCheckbox.checked;
   const nv = Number(ui.settingsNsfwThresholdInput.value);
   ui.settings.nsfwBlurMinLevel = Number.isFinite(nv) && nv >= 0 ? Math.min(128, Math.round(nv)) : 4;
-  saveSettingsToCookie(ui);
+  saveSettingsToCookie(ui);  // saves to server
   applySettings(ui);
 }
 
 export async function checkCivitaiStatus(ui) {
   const setDot = (id, status) => {
     const dot = ui.modal.querySelector(`#civitai-dot-${id}`);
-    if (dot) { dot.className = `civitai-dot ${status}`; }
+    if (dot) dot.className = `civitai-dot ${status}`;
   };
   const setMsg = (id, msg) => {
     const el = ui.modal.querySelector(`#civitai-msg-${id}`);
     if (el) el.textContent = msg;
   };
 
-  // Set all to checking
   ['statuspage', 'api', 'search'].forEach(id => {
     setDot(id, 'unknown');
     setMsg(id, 'Checking...');
@@ -118,7 +153,7 @@ export async function checkCivitaiStatus(ui) {
         }
       }
     }
-  } catch (e) {
+  } catch (_) {
     ['statuspage', 'api', 'search'].forEach(id => {
       setDot(id, 'error');
       setMsg(id, 'Check failed');

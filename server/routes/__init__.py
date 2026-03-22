@@ -13,6 +13,7 @@ from . import (
     OpenPath,
     ClearHistory,
     CivitaiStatus,
+    SaveSettings,
 )
 
 print("[Civicomfy] All server routes loaded.")

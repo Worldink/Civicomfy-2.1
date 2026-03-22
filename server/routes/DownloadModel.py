@@ -123,10 +123,7 @@ async def route_download(request):
         if not download_url:
             return web.json_response({"error": "No download URL"}, status=404)
 
-        # Token auth for Civitai CDN
-        if api_key and "civitai.com" in download_url:
-            sep = "&" if "?" in download_url else "?"
-            download_url = f"{download_url}{sep}token={api_key}"
+        # NOTE: token is appended by ChunkDownloader — not here (avoids double-token)
 
         # Filename
         api_filename = pf.get("name", f"model_{mid}_v{vid}")
@@ -193,6 +190,12 @@ async def route_download(request):
         }
 
         did = download_manager.add_to_queue(info)
+
+        if not did:
+            return web.json_response({
+                "status": "duplicate",
+                "message": "This model is already downloading or queued.",
+            })
 
         return web.json_response({
             "status": "queued",

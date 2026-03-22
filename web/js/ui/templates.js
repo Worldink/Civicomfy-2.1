@@ -115,8 +115,9 @@ export function modalTemplate(settings = {}) {
             <div class="civitai-settings-section">
               <h4>API & Paths</h4>
               <div class="civitai-form-group">
-                <label for="civitai-settings-api-key">Civitai API Key</label>
-                <input type="password" id="civitai-settings-api-key" class="civitai-input" placeholder="Optional" autocomplete="new-password">
+                <label for="civitai-settings-api-key">Civitai API Key <span style="font-weight:normal;color:#888;">(optional)</span></label>
+                <input type="password" id="civitai-settings-api-key" class="civitai-input" placeholder="Not required for most models" autocomplete="new-password">
+                <p style="font-size:.82em;color:#999;margin-top:5px;">Only needed for some restricted models. Get yours at <a href="https://civitai.com/user/account" target="_blank" rel="noopener" style="color:var(--accent-color,#5c8aff);">civitai.com/user/account</a></p>
               </div>
               <div class="civitai-form-group">
                 <label for="civitai-settings-global-root">Global Root</label>

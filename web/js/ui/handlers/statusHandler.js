@@ -19,6 +19,41 @@ export async function updateStatus(ui) {
   try {
     const d = await CivitaiDownloaderAPI.getStatus();
     if (!d?.active || !d?.queue || !d?.history) return;
+
+    // Detect newly completed downloads → update installed set + refresh preview
+    const prevCompleted = ui._completedIds || new Set();
+    const newCompleted = new Set();
+    for (const item of d.history) {
+      if (item.status === 'completed' && item.civitai_model_id && item.civitai_version_id) {
+        const key = `${item.civitai_model_id}:${item.civitai_version_id}`;
+        newCompleted.add(item.id);
+        if (!prevCompleted.has(item.id)) {
+          // Newly completed — add to installed set
+          ui._installedVersions.add(key);
+        }
+      }
+    }
+    // Also check active (just finished but not yet in history)
+    for (const item of d.active) {
+      if (item.status === 'completed' && item.civitai_model_id && item.civitai_version_id) {
+        ui._installedVersions.add(`${item.civitai_model_id}:${item.civitai_version_id}`);
+      }
+    }
+    ui._completedIds = newCompleted;
+
+    // If Download tab is open and showing a model that just got installed → update button
+    if (ui.activeTab === 'download' && ui._previewModelId && ui._previewVersionId) {
+      const key = `${ui._previewModelId}:${ui._previewVersionId}`;
+      if (ui._installedVersions.has(key)) {
+        const btn = ui.downloadSubmitButton;
+        if (btn && !btn.classList.contains('civitai-btn-installed')) {
+          btn.disabled = true;
+          btn.className = 'civitai-button civitai-download-btn civitai-btn-installed';
+          btn.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+        }
+      }
+    }
+
     ui.statusData = d;
     const cnt = d.active.length + d.queue.length;
     if (ui.activeCountSpan) ui.activeCountSpan.textContent = cnt;

@@ -29,6 +29,10 @@ export function renderDownloadPreview(ui, data) {
   // Check installed from in-memory library scan (instant, no backend call)
   const alreadyDl = ui.isVersionInstalled(mid, vid) || data.already_downloaded === true;
 
+  // Store current preview IDs for status poll to detect completed downloads
+  ui._previewModelId = mid;
+  ui._previewVersionId = vid;
+
   const civLink = mid ? `https://civitai.com/models/${mid}${vid ? '?modelVersionId=' + vid : ''}` : '#';
 
   // --- Version selector ---

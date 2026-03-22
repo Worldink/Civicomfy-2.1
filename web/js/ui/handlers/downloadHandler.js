@@ -56,10 +56,22 @@ export async function handleDownloadSubmit(ui) {
   const url = ui.modelUrlInput.value.trim();
   if (!url) { ui.showToast("URL required.", "error"); _resetBtn(ui); return; }
 
+  const vid = ui.modal.querySelector('#civitai-model-version-id')?.value || null;
+
+  // Quick in-memory check: already installed?
+  const checkMid = ui._previewModelId;
+  const checkVid = vid || ui._previewVersionId;
+  if (checkMid && checkVid && ui.isVersionInstalled(checkMid, checkVid)) {
+    ui.showToast("This version is already installed.", "info", 4000);
+    ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn civitai-btn-installed';
+    ui.downloadSubmitButton.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+    return;  // button stays disabled
+  }
+
   const params = {
     model_url_or_id: url,
     model_type: ui.downloadModelTypeSelect.value,
-    model_version_id: ui.modal.querySelector('#civitai-model-version-id')?.value || null,
+    model_version_id: vid,
     custom_filename: ui.customFilenameInput.value.trim(),
     subfolder: ui.subfolderInput?.value?.trim() || '',
     api_key: ui.settings.apiKey,
@@ -73,20 +85,31 @@ export async function handleDownloadSubmit(ui) {
     const r = await CivitaiDownloaderAPI.downloadModel(params);
     if (r.status === 'queued') {
       ui.showToast(`Queued: ${r.details?.filename || 'Model'}`, 'success');
+      // Keep button disabled — download is in progress
+      ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
       if (ui.settings.autoOpenStatusTab) ui.switchTab('status');
       else ui.updateStatus();
+      return;  // don't reset button — polling will update it when done
     } else if (r.status === 'blocked') {
       ui.showToast(r.message || 'Early Access.', 'error', 5000);
     } else if (r.status === 'already_installed') {
       ui.showToast(r.message || 'Already installed.', 'info', 4000);
+      ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn civitai-btn-installed';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-check"></i> Already Installed';
+      return;  // button stays disabled
+    } else if (r.status === 'duplicate') {
+      ui.showToast(r.message || 'Already downloading.', 'info', 4000);
+      ui.downloadSubmitButton.className = 'civitai-button civitai-download-btn';
+      ui.downloadSubmitButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Downloading...';
+      return;  // button stays disabled
     } else {
       ui.showToast(`${r.status}: ${r.message || ''}`, 'info');
     }
   } catch (e) {
     ui.showToast(`Failed: ${e.details || e.message}`, 'error', 6000);
-  } finally {
-    _resetBtn(ui);
   }
+  _resetBtn(ui);
 }
 
 function _resetBtn(ui) {

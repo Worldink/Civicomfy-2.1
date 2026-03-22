@@ -74,4 +74,8 @@ export class CivitaiDownloaderAPI {
 
   // Status check
   static checkCivitaiStatus() { return this._req("/civitai/check_status"); }
+
+  // Settings (persistent on server disk)
+  static loadSettings()       { return this._req("/civitai/settings"); }
+  static saveSettings(data)   { return this._post("/civitai/settings", data); }
 }
